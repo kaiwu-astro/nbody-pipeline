@@ -16,11 +16,11 @@ from dragon3_pipelines.analysis.cache_paths import (
 from dragon3_pipelines.analysis.hdf5_scan import (
     FeatherMetaCacheMixin,
     HDF5ScanJob,
-    HDF5ScanOptions,
     ScanBackedAnalysisBase,
     default_file_meta,
     file_is_fresh,
 )
+from dragon3_pipelines.io.collision_reader import Coal24FileProcessor, Coll13FileProcessor
 
 IMBH_MIN_MASS_MSUN = 100.0
 IMBH_MAX_MASS_MSUN = 1.0e5
@@ -49,6 +49,9 @@ SNAPSHOT_COLUMNS = [
     "binary_a_au",
     "binary_ecc",
     "tau_gw_myr",
+    "tidal_radius_pc",
+    "escape_radius_pc",
+    "is_escape_candidate",
     "source_hdf5_path",
 ]
 
@@ -70,18 +73,10 @@ MERGER_COLUMNS = [
     "parent_mass_3_msun",
     "is_imbh_product",
     "has_imbh_parent",
-    "source_hdf5_path",
-    "Mer NAM1",
-    "Mer NAM2",
-    "Mer NAM3",
-    "Mer NAMC",
-    "Mer KW1",
-    "Mer KW2",
-    "Mer KW3",
-    "Mer KWC",
-    "Mer M1",
-    "Mer M2",
-    "Mer M3",
+    "discarded_parent_name",
+    "survivor_parent_index",
+    "equal_mass_survivor_fallback",
+    "event_source",
 ]
 
 OBJECT_COLUMNS = [
@@ -98,11 +93,24 @@ OBJECT_COLUMNS = [
     "hierarchical_merger_generation",
     "fate_label",
     "fate_product_name",
+    "first_escape_ttot",
+    "first_escape_time_myr",
 ]
 
 
 class IntermediateMassBlackHoleAnalyzer(ScanBackedAnalysisBase):
     """Identify and summarize IMBH candidates across HDF5 snapshots."""
+
+    def __init__(
+        self,
+        config_manager: Any,
+        hdf5_file_processor: Any | None = None,
+        coll13_file_processor: Any | None = None,
+        coal24_file_processor: Any | None = None,
+    ) -> None:
+        super().__init__(config_manager, hdf5_file_processor)
+        self.coll13_file_processor = coll13_file_processor or Coll13FileProcessor(config_manager)
+        self.coal24_file_processor = coal24_file_processor or Coal24FileProcessor(config_manager)
 
     def load_imbh_snapshots(
         self,
@@ -125,7 +133,8 @@ class IntermediateMassBlackHoleAnalyzer(ScanBackedAnalysisBase):
         """Return normalized merger events linked to IMBH candidates or products."""
         job = self.build_scan_job(simu_name, force=force)
         if update:
-            self._run_scan_job(job)
+            snapshots = self._run_scan_job(job)
+            return self._refresh_true_merger_events(job.task, snapshots)
         return job.task.read_merger_cache()
 
     def summarize_simulation(
@@ -138,7 +147,10 @@ class IntermediateMassBlackHoleAnalyzer(ScanBackedAnalysisBase):
         """Summarize IMBH objects, formation channels, and conservative fates."""
         job = self.build_scan_job(simu_name, force=force)
         snapshots = self._load_or_update_scan_job(job, update=update)
-        merger_events = job.task.read_merger_cache()
+        if update:
+            merger_events = self._refresh_true_merger_events(job.task, snapshots)
+        else:
+            merger_events = job.task.read_merger_cache()
         meta = job.task.read_meta()
         objects = self._summarize_objects(simu_name, snapshots, merger_events, meta)
 
@@ -181,6 +193,7 @@ class IntermediateMassBlackHoleAnalyzer(ScanBackedAnalysisBase):
             generation = generation_by_product.get(obj_key, 0)
             formation_channel = self._formation_channel(group, obj_key, generation, min_ttot)
             fate_label, fate_product = self._fate(group, obj_key, max_ttot, events_by_parent)
+            first_escape = _first_escape_row(group)
             rows.append(
                 {
                     "simu_name": simu_name,
@@ -198,6 +211,14 @@ class IntermediateMassBlackHoleAnalyzer(ScanBackedAnalysisBase):
                     "hierarchical_merger_generation": int(generation),
                     "fate_label": fate_label,
                     "fate_product_name": fate_product,
+                    "first_escape_ttot": (
+                        float(first_escape["TTOT"]) if first_escape is not None else np.nan
+                    ),
+                    "first_escape_time_myr": (
+                        _float_or_nan(first_escape.get("Time[Myr]"))
+                        if first_escape is not None
+                        else np.nan
+                    ),
                 }
             )
         return pd.DataFrame(rows, columns=OBJECT_COLUMNS)
@@ -228,8 +249,6 @@ class IntermediateMassBlackHoleAnalyzer(ScanBackedAnalysisBase):
         events_by_parent: Mapping[Any, list[pd.Series]],
     ) -> tuple[str, Any]:
         last_ttot = float(group["TTOT"].max())
-        if max_ttot is not None and np.isclose(last_ttot, max_ttot, rtol=0.0, atol=1e-9):
-            return "retained_candidate", pd.NA
         later_events = [
             event
             for event in events_by_parent.get(object_name, [])
@@ -238,9 +257,24 @@ class IntermediateMassBlackHoleAnalyzer(ScanBackedAnalysisBase):
         if later_events:
             event = sorted(later_events, key=lambda row: float(row["TTOT"]))[0]
             return "merged_into_other", event.get("product_name", pd.NA)
+        if _has_escape_candidate(group):
+            return "escaped_candidate", pd.NA
+        if max_ttot is not None and np.isclose(last_ttot, max_ttot, rtol=0.0, atol=1e-9):
+            return "retained_candidate", pd.NA
         if max_ttot is not None and last_ttot < max_ttot:
             return "not_seen_at_scan_end", pd.NA
         return "unknown", pd.NA
+
+    def _refresh_true_merger_events(
+        self, task: "IntermediateMassBlackHoleTask", snapshots: pd.DataFrame
+    ) -> pd.DataFrame:
+        events = task.true_merger_events_from_continuous_files(
+            self.coll13_file_processor,
+            self.coal24_file_processor,
+            snapshots=snapshots,
+        )
+        task.write_merger_cache(events)
+        return events
 
     def _summary_counts(self, objects: pd.DataFrame, meta: Mapping[str, Any]) -> dict[str, Any]:
         processed_files = meta.get("processed_files", {}) if isinstance(meta, Mapping) else {}
@@ -272,22 +306,20 @@ class IntermediateMassBlackHoleAnalyzer(ScanBackedAnalysisBase):
 
 
 class IntermediateMassBlackHoleTask(FeatherMetaCacheMixin):
-    """Scan HDF5 files for IMBH candidate snapshots and linked merger events."""
+    """Scan HDF5 files for IMBH candidate snapshots."""
 
-    schema_version = 1
+    schema_version = 2
     name = "intermediate_mass_black_hole"
-    required_tables: Sequence[str] = ("scalars", "singles", "binaries", "mergers")
+    required_tables: Sequence[str] = ("scalars", "singles", "binaries")
     columns_by_table: Mapping[str, Sequence[str] | None] = {
-        "scalars": ["TTOT", "Time[Myr]"],
+        "scalars": ["TTOT", "Time[Myr]", "RBAR", "TIDAL(1)"],
         "singles": None,
         "binaries": None,
-        "mergers": None,
     }
 
     def __init__(self, config_manager: Any, simu_name: str) -> None:
         self.config = config_manager
         self.simu_name = simu_name
-        self._merger_cache_df = pd.DataFrame(columns=MERGER_COLUMNS)
 
     @property
     def cache_path(self) -> Path:
@@ -295,10 +327,9 @@ class IntermediateMassBlackHoleTask(FeatherMetaCacheMixin):
 
     @property
     def merger_cache_path(self) -> Path:
-        return self._cache_dir() / "imbh_merger_events.feather"
+        return self._cache_dir() / "imbh_true_merger_events.feather"
 
     def read_cache(self) -> pd.DataFrame:
-        self._merger_cache_df = self.read_merger_cache()
         cache_df = super().read_cache()
         if cache_df.empty:
             return pd.DataFrame(columns=SNAPSHOT_COLUMNS)
@@ -310,14 +341,17 @@ class IntermediateMassBlackHoleTask(FeatherMetaCacheMixin):
         event_df = pd.read_feather(self.merger_cache_path)
         return self.finalize_merger_cache(event_df)
 
+    def write_merger_cache(self, event_df: pd.DataFrame) -> None:
+        self.merger_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        event_df = self.finalize_merger_cache(event_df)
+        tmp_event_path = self.merger_cache_path.with_suffix(self.merger_cache_path.suffix + ".tmp")
+        event_df.to_feather(tmp_event_path)
+        tmp_event_path.replace(self.merger_cache_path)
+
     def is_file_fresh(self, hdf5_path: str, meta: Dict[str, Any], cache_df: pd.DataFrame) -> bool:
         cached_times = set()
         if "TTOT" in cache_df.columns:
             cached_times.update(float(ttot) for ttot in cache_df["TTOT"].dropna().unique())
-        if "TTOT" in self._merger_cache_df.columns:
-            cached_times.update(
-                float(ttot) for ttot in self._merger_cache_df["TTOT"].dropna().unique()
-            )
         return file_is_fresh(hdf5_path, meta, cached_times or None)
 
     def process_file(
@@ -329,15 +363,7 @@ class IntermediateMassBlackHoleTask(FeatherMetaCacheMixin):
     ) -> Dict[str, Any]:
         file_meta = self._file_meta(hdf5_path, df_dict)
         snapshots = pd.DataFrame(self._snapshot_rows(hdf5_path, df_dict), columns=SNAPSHOT_COLUMNS)
-        known_imbh_names = set()
-        if "object_name" in cache_df.columns:
-            known_imbh_names.update(_normalize_name(name) for name in cache_df["object_name"])
-        if "object_name" in snapshots.columns:
-            known_imbh_names.update(_normalize_name(name) for name in snapshots["object_name"])
-        merger_events = pd.DataFrame(
-            self._merger_rows(hdf5_path, df_dict, known_imbh_names), columns=MERGER_COLUMNS
-        )
-        return {"rows": snapshots, "merger_rows": merger_events, "file_meta": file_meta}
+        return {"rows": snapshots, "file_meta": file_meta}
 
     def merge_file_result(
         self, cache_df: pd.DataFrame, hdf5_path: str, result: Dict[str, Any]
@@ -352,16 +378,6 @@ class IntermediateMassBlackHoleTask(FeatherMetaCacheMixin):
             else:
                 cache_df = pd.concat([cache_df, new_df], ignore_index=True, sort=False)
 
-        event_df = self._merger_cache_df
-        if "TTOT" in event_df.columns and ttot_values:
-            event_df = event_df[~event_df["TTOT"].astype(float).isin(ttot_values)]
-        new_events = result.get("merger_rows", pd.DataFrame(columns=MERGER_COLUMNS))
-        if not new_events.empty:
-            if event_df.empty:
-                event_df = new_events
-            else:
-                event_df = pd.concat([event_df, new_events], ignore_index=True, sort=False)
-        self._merger_cache_df = self.finalize_merger_cache(event_df)
         return self.finalize_cache(cache_df)
 
     def finalize_cache(self, cache_df: pd.DataFrame) -> pd.DataFrame:
@@ -377,19 +393,6 @@ class IntermediateMassBlackHoleTask(FeatherMetaCacheMixin):
         sort_columns = ["TTOT", "product_name"]
         return event_df.sort_values(sort_columns).reset_index(drop=True)[MERGER_COLUMNS]
 
-    def write_cache_and_meta(
-        self,
-        cache_df: pd.DataFrame,
-        processed_files: Dict[str, Dict[str, Any]],
-        options: HDF5ScanOptions,
-    ) -> None:
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        event_df = self.finalize_merger_cache(self._merger_cache_df)
-        tmp_event_path = self.merger_cache_path.with_suffix(self.merger_cache_path.suffix + ".tmp")
-        event_df.to_feather(tmp_event_path)
-        tmp_event_path.replace(self.merger_cache_path)
-        super().write_cache_and_meta(cache_df, processed_files, options)
-
     def _cache_dir(self) -> Path:
         return analysis_cache_dir(self.config, self.simu_name, INTERMEDIATE_MASS_BLACK_HOLE_FEATURE)
 
@@ -397,12 +400,18 @@ class IntermediateMassBlackHoleTask(FeatherMetaCacheMixin):
         self, hdf5_path: str, df_dict: Mapping[str, pd.DataFrame]
     ) -> list[dict[str, Any]]:
         rows = []
+        scalar_context_by_ttot = _scalar_context_by_ttot(df_dict.get("scalars", pd.DataFrame()))
         singles = df_dict.get("singles", pd.DataFrame())
         if not singles.empty:
             self._require_columns(singles, {"KW", "M", "TTOT"}, "single IMBH extraction")
             single_candidates = singles.loc[_imbh_mask(singles["KW"], singles["M"])]
             for _, row in single_candidates.iterrows():
-                rows.append(self._single_row(hdf5_path, row))
+                rows.append(
+                    self._with_escape_context(
+                        self._single_row(hdf5_path, row),
+                        scalar_context_by_ttot.get(float(row["TTOT"]), {}),
+                    )
+                )
 
         binaries = df_dict.get("binaries", pd.DataFrame())
         if not binaries.empty:
@@ -413,9 +422,19 @@ class IntermediateMassBlackHoleTask(FeatherMetaCacheMixin):
             )
             for _, row in binaries.iterrows():
                 if _is_imbh(row["Bin KW1"], row["Bin M1*"]):
-                    rows.append(self._binary_row(hdf5_path, row, component_index=1))
+                    rows.append(
+                        self._with_escape_context(
+                            self._binary_row(hdf5_path, row, component_index=1),
+                            scalar_context_by_ttot.get(float(row["TTOT"]), {}),
+                        )
+                    )
                 if _is_imbh(row["Bin KW2"], row["Bin M2*"]):
-                    rows.append(self._binary_row(hdf5_path, row, component_index=2))
+                    rows.append(
+                        self._with_escape_context(
+                            self._binary_row(hdf5_path, row, component_index=2),
+                            scalar_context_by_ttot.get(float(row["TTOT"]), {}),
+                        )
+                    )
         return rows
 
     def _single_row(self, hdf5_path: str, row: pd.Series) -> dict[str, Any]:
@@ -442,6 +461,9 @@ class IntermediateMassBlackHoleTask(FeatherMetaCacheMixin):
             "binary_a_au": np.nan,
             "binary_ecc": np.nan,
             "tau_gw_myr": np.nan,
+            "tidal_radius_pc": np.nan,
+            "escape_radius_pc": np.nan,
+            "is_escape_candidate": False,
             "source_hdf5_path": hdf5_path,
         }
 
@@ -478,75 +500,108 @@ class IntermediateMassBlackHoleTask(FeatherMetaCacheMixin):
             "binary_a_au": _float_or_nan(row.get("Bin A[au]")),
             "binary_ecc": _float_or_nan(row.get("Bin ECC")),
             "tau_gw_myr": _float_or_nan(row.get("tau_gw[Myr]")),
+            "tidal_radius_pc": np.nan,
+            "escape_radius_pc": np.nan,
+            "is_escape_candidate": False,
             "source_hdf5_path": hdf5_path,
         }
 
-    def _merger_rows(
-        self,
-        hdf5_path: str,
-        df_dict: Mapping[str, pd.DataFrame],
-        known_imbh_names: set[Any],
-    ) -> list[dict[str, Any]]:
-        mergers = df_dict.get("mergers", pd.DataFrame())
-        if mergers.empty:
-            return []
-        rows = []
-        for _, row in mergers.iterrows():
-            event = self._normalized_merger_row(hdf5_path, row)
-            product_key = _normalize_name(event["product_name"])
-            parent_keys = {
-                _normalize_name(event["parent_name_1"]),
-                _normalize_name(event["parent_name_2"]),
-                _normalize_name(event["parent_name_3"]),
-            }
-            is_product = _is_imbh(event["product_kw"], event["product_mass_msun"])
-            has_parent = any(
-                parent in known_imbh_names for parent in parent_keys if not pd.isna(parent)
-            ) or any(
-                _is_imbh(event[f"parent_kw_{index}"], event[f"parent_mass_{index}_msun"])
-                for index in [1, 2, 3]
-            )
-            event["is_imbh_product"] = bool(is_product)
-            event["has_imbh_parent"] = bool(has_parent)
-            if (
-                event["is_imbh_product"]
-                or event["has_imbh_parent"]
-                or product_key in known_imbh_names
-            ):
-                rows.append(event)
-        return rows
+    def _with_escape_context(
+        self, snapshot_row: dict[str, Any], scalar_context: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        tidal_radius_pc, escape_radius_pc = _escape_radii_pc(scalar_context)
+        snapshot_row["tidal_radius_pc"] = tidal_radius_pc
+        snapshot_row["escape_radius_pc"] = escape_radius_pc
+        radius_pc = _float_or_nan(snapshot_row.get("radius_pc"))
+        snapshot_row["is_escape_candidate"] = bool(
+            np.isfinite(radius_pc)
+            and np.isfinite(escape_radius_pc)
+            and radius_pc > escape_radius_pc
+        )
+        return snapshot_row
 
-    def _normalized_merger_row(self, hdf5_path: str, row: pd.Series) -> dict[str, Any]:
+    def true_merger_events_from_continuous_files(
+        self,
+        coll13_file_processor: Any,
+        coal24_file_processor: Any,
+        *,
+        snapshots: pd.DataFrame,
+    ) -> pd.DataFrame:
+        event_frames = []
+        for processor in [coll13_file_processor, coal24_file_processor]:
+            if not _continuous_files_exist(self.config, self.simu_name, processor.file_basename):
+                continue
+            event_frames.append(processor.read_file(self.simu_name))
+        if not event_frames:
+            return pd.DataFrame(columns=MERGER_COLUMNS)
+
+        known_imbh_names = set()
+        if "object_name" in snapshots.columns:
+            known_imbh_names.update(_normalize_name(name) for name in snapshots["object_name"])
+
+        raw_events = pd.concat(event_frames, ignore_index=True, sort=False)
+        rows = [
+            self._normalized_true_merger_row(row, known_imbh_names)
+            for _, row in raw_events.iterrows()
+        ]
+        rows = [
+            row
+            for row in rows
+            if row["is_imbh_product"]
+            or row["has_imbh_parent"]
+            or _normalize_name(row["product_name"]) in known_imbh_names
+        ]
+        return self.finalize_merger_cache(pd.DataFrame(rows, columns=MERGER_COLUMNS))
+
+    def _normalized_true_merger_row(
+        self, row: pd.Series, known_imbh_names: set[Any]
+    ) -> dict[str, Any]:
+        parent_name_1 = _first_existing(row, ["I1", "I(1)", "NAME(I1)", "NAM(I1)", "Name(I1)"])
+        parent_name_2 = _first_existing(row, ["I2", "I(2)", "NAME(I2)", "NAM(I2)", "Name(I2)"])
+        parent_mass_1 = _float_or_nan(row.get("M(I1)[M*]"))
+        parent_mass_2 = _float_or_nan(row.get("M(I2)[M*]"))
+        parent_kw_1 = row.get("K*(I1)", pd.NA)
+        parent_kw_2 = row.get("K*(I2)", pd.NA)
+        survivor_index = _survivor_parent_index(parent_mass_1, parent_mass_2)
+        product_name = parent_name_1 if survivor_index == 1 else parent_name_2
+        product_kw = parent_kw_1 if survivor_index == 1 else parent_kw_2
+        discarded_parent_name = parent_name_2 if survivor_index == 1 else parent_name_1
+        product_mass = _true_merger_product_mass(parent_mass_1, parent_mass_2)
+        parent_keys = {_normalize_name(parent_name_1), _normalize_name(parent_name_2)}
+        has_parent = any(
+            parent in known_imbh_names for parent in parent_keys if not pd.isna(parent)
+        )
+        has_parent = (
+            has_parent
+            or _is_imbh(parent_kw_1, parent_mass_1)
+            or _is_imbh(parent_kw_2, parent_mass_2)
+        )
         return {
             "simu_name": self.simu_name,
-            "TTOT": _float_or_nan(row.get("TTOT")),
+            "TTOT": _float_or_nan(_first_existing(row, ["TTOT", "TIME[NB]"])),
             "Time[Myr]": _float_or_nan(row.get("Time[Myr]")),
-            "product_name": row.get("Mer NAMC", pd.NA),
-            "parent_name_1": row.get("Mer NAM1", pd.NA),
-            "parent_name_2": row.get("Mer NAM2", pd.NA),
-            "parent_name_3": row.get("Mer NAM3", pd.NA),
-            "product_kw": row.get("Mer KWC", pd.NA),
-            "parent_kw_1": row.get("Mer KW1", pd.NA),
-            "parent_kw_2": row.get("Mer KW2", pd.NA),
-            "parent_kw_3": row.get("Mer KW3", pd.NA),
-            "product_mass_msun": _merger_product_mass(row),
-            "parent_mass_1_msun": _float_or_nan(row.get("Mer M1")),
-            "parent_mass_2_msun": _float_or_nan(row.get("Mer M2")),
-            "parent_mass_3_msun": _float_or_nan(row.get("Mer M3")),
-            "is_imbh_product": False,
-            "has_imbh_parent": False,
-            "source_hdf5_path": hdf5_path,
-            "Mer NAM1": row.get("Mer NAM1", pd.NA),
-            "Mer NAM2": row.get("Mer NAM2", pd.NA),
-            "Mer NAM3": row.get("Mer NAM3", pd.NA),
-            "Mer NAMC": row.get("Mer NAMC", pd.NA),
-            "Mer KW1": row.get("Mer KW1", pd.NA),
-            "Mer KW2": row.get("Mer KW2", pd.NA),
-            "Mer KW3": row.get("Mer KW3", pd.NA),
-            "Mer KWC": row.get("Mer KWC", pd.NA),
-            "Mer M1": row.get("Mer M1", np.nan),
-            "Mer M2": row.get("Mer M2", np.nan),
-            "Mer M3": row.get("Mer M3", np.nan),
+            "product_name": product_name,
+            "parent_name_1": parent_name_1,
+            "parent_name_2": parent_name_2,
+            "parent_name_3": pd.NA,
+            "product_kw": product_kw,
+            "parent_kw_1": parent_kw_1,
+            "parent_kw_2": parent_kw_2,
+            "parent_kw_3": pd.NA,
+            "product_mass_msun": product_mass,
+            "parent_mass_1_msun": parent_mass_1,
+            "parent_mass_2_msun": parent_mass_2,
+            "parent_mass_3_msun": np.nan,
+            "is_imbh_product": _is_imbh(product_kw, product_mass),
+            "has_imbh_parent": bool(has_parent),
+            "discarded_parent_name": discarded_parent_name,
+            "survivor_parent_index": survivor_index,
+            "equal_mass_survivor_fallback": bool(
+                np.isfinite(parent_mass_1)
+                and np.isfinite(parent_mass_2)
+                and np.isclose(parent_mass_1, parent_mass_2, rtol=0.0, atol=0.0)
+            ),
+            "event_source": row.get("Merger_type", pd.NA),
         }
 
     def _file_meta(self, hdf5_path: str, df_dict: Mapping[str, pd.DataFrame]) -> Dict[str, Any]:
@@ -615,11 +670,6 @@ def _binary_speed(row: pd.Series) -> float:
     return np.nan
 
 
-def _merger_product_mass(row: pd.Series) -> float:
-    values = [_float_or_nan(row.get(column)) for column in ["Mer M1", "Mer M2", "Mer M3"]]
-    return float(np.nansum(values)) if not all(np.isnan(value) for value in values) else np.nan
-
-
 def _normalize_name(value: Any) -> Any:
     if value is None or pd.isna(value):
         return pd.NA
@@ -630,33 +680,90 @@ def _normalize_name(value: Any) -> Any:
     return value
 
 
+def _continuous_files_exist(config: Any, simu_name: str, file_basename: str) -> bool:
+    simu_path = Path(config.pathof[simu_name])
+    return any(simu_path.rglob(f"{file_basename}*"))
+
+
+def _survivor_parent_index(parent_mass_1: float, parent_mass_2: float) -> int:
+    if np.isfinite(parent_mass_1) and np.isfinite(parent_mass_2):
+        if parent_mass_2 > parent_mass_1:
+            return 2
+        return 1
+    if np.isfinite(parent_mass_2):
+        return 2
+    return 1
+
+
+def _true_merger_product_mass(parent_mass_1: float, parent_mass_2: float) -> float:
+    values = [parent_mass_1, parent_mass_2]
+    return float(np.nansum(values)) if any(np.isfinite(value) for value in values) else np.nan
+
+
+def _scalar_context_by_ttot(scalars: pd.DataFrame) -> dict[float, dict[str, Any]]:
+    if scalars.empty:
+        return {}
+    if "TTOT" in scalars.columns:
+        scalar_rows = scalars
+    else:
+        scalar_rows = scalars.reset_index().rename(columns={"index": "TTOT"})
+    context: dict[float, dict[str, Any]] = {}
+    for _, row in scalar_rows.iterrows():
+        if "TTOT" not in row or pd.isna(row["TTOT"]):
+            continue
+        context[float(row["TTOT"])] = {
+            "RBAR": row.get("RBAR", np.nan),
+            "TIDAL(1)": row.get("TIDAL(1)", np.nan),
+        }
+    return context
+
+
+def _escape_radii_pc(scalar_context: Mapping[str, Any]) -> tuple[float, float]:
+    tidal_1 = _float_or_nan(scalar_context.get("TIDAL(1)"))
+    rbar = _float_or_nan(scalar_context.get("RBAR"))
+    if not np.isfinite(tidal_1) or not np.isfinite(rbar) or tidal_1 <= 0:
+        return np.nan, np.nan
+    tidal_radius_pc = float((0.5 / tidal_1) ** (1.0 / 3.0) * rbar)
+    return tidal_radius_pc, 2.0 * tidal_radius_pc
+
+
+def _has_escape_candidate(group: pd.DataFrame) -> bool:
+    if "is_escape_candidate" not in group.columns:
+        return False
+    return bool(group["is_escape_candidate"].fillna(False).any())
+
+
+def _first_escape_row(group: pd.DataFrame) -> pd.Series | None:
+    if "is_escape_candidate" not in group.columns:
+        return None
+    escaped = group.loc[group["is_escape_candidate"].fillna(False)]
+    if escaped.empty:
+        return None
+    return escaped.sort_values("TTOT").iloc[0]
+
+
 def _merger_generations(merger_events: pd.DataFrame) -> dict[Any, int]:
     if merger_events.empty:
         return {}
-    parents_by_product = {}
-    for _, event in merger_events.iterrows():
+    generation_by_name: dict[Any, int] = {}
+    generation_by_product: dict[Any, int] = {}
+    events = merger_events.sort_values("TTOT") if "TTOT" in merger_events.columns else merger_events
+    for _, event in events.iterrows():
         product = _normalize_name(event.get("product_name"))
         if pd.isna(product):
             continue
-        parents_by_product[product] = [
+        parents = [
             _normalize_name(event.get("parent_name_1")),
             _normalize_name(event.get("parent_name_2")),
             _normalize_name(event.get("parent_name_3")),
         ]
-
-    memo: dict[Any, int] = {}
-
-    def generation(name: Any) -> int:
-        if name in memo:
-            return memo[name]
-        parents = [parent for parent in parents_by_product.get(name, []) if not pd.isna(parent)]
-        if not parents:
-            memo[name] = 0
-            return 0
-        memo[name] = 1 + max(generation(parent) for parent in parents)
-        return memo[name]
-
-    return {product: generation(product) for product in parents_by_product}
+        parent_generations = [
+            generation_by_name.get(parent, 0) for parent in parents if not pd.isna(parent)
+        ]
+        product_generation = 1 + max(parent_generations, default=0)
+        generation_by_name[product] = max(generation_by_name.get(product, 0), product_generation)
+        generation_by_product[product] = generation_by_name[product]
+    return generation_by_product
 
 
 def _events_by_parent(merger_events: pd.DataFrame) -> dict[Any, list[pd.Series]]:
@@ -664,10 +771,9 @@ def _events_by_parent(merger_events: pd.DataFrame) -> dict[Any, list[pd.Series]]
     if merger_events.empty:
         return events
     for _, event in merger_events.iterrows():
-        for column in ["parent_name_1", "parent_name_2", "parent_name_3"]:
-            parent = _normalize_name(event.get(column))
-            if not pd.isna(parent):
-                events[parent].append(event)
+        parent = _normalize_name(event.get("discarded_parent_name"))
+        if not pd.isna(parent):
+            events[parent].append(event)
     return events
 
 

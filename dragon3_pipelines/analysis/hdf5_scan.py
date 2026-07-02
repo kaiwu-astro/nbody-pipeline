@@ -149,7 +149,13 @@ class HDF5ScanRunner:
             meta = task.read_meta()
             meta_options = meta.get("scan_options") if isinstance(meta, dict) else None
             options_changed = bool(meta) and meta_options != persistent_scan_options(options)
-            if options.force or options_changed:
+            schema_version = getattr(task, "schema_version", None)
+            schema_changed = (
+                bool(meta)
+                and schema_version is not None
+                and meta.get("schema_version") != schema_version
+            )
+            if options.force or options_changed or schema_changed:
                 cache_df = pd.DataFrame()
                 meta: Dict[str, Any] = {}
             else:

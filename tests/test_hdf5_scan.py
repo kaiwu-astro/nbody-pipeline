@@ -16,6 +16,7 @@ from dragon3_pipelines.analysis.binary_stellar_type import BinaryStellarTypeExtr
 from dragon3_pipelines.analysis.compact_binary_counter import CompactBinaryCounter
 from dragon3_pipelines.analysis.intermediate_mass_black_hole import (
     IntermediateMassBlackHoleAnalyzer,
+    MERGER_COLUMNS,
 )
 from dragon3_pipelines.analysis import hdf5_scan
 from dragon3_pipelines.analysis.initial_total_mass import InitialTotalMassAnalyzer
@@ -99,6 +100,17 @@ class FakeProcessor:
     def read_tables(self, hdf5_path, simu_name, tables, columns_by_table=None, use_cache=True):
         self.read_count += 1
         return {table: self.tables_by_path[hdf5_path][table] for table in tables}
+
+
+class FakeContinuousProcessor:
+    def __init__(self, file_basename: str, df: pd.DataFrame):
+        self.file_basename = file_basename
+        self.df = df
+        self.read_count = 0
+
+    def read_file(self, simu_name: str) -> pd.DataFrame:
+        self.read_count += 1
+        return self.df.copy()
 
 
 class FakeProgress:
@@ -585,6 +597,8 @@ def imbh_tables(
     binaries: pd.DataFrame | None = None,
     mergers: pd.DataFrame | None = None,
     times: list[float] | None = None,
+    rbar: float | list[float] | None = None,
+    tidal_1: float | list[float] | None = None,
 ) -> dict[str, pd.DataFrame]:
     if times is None:
         values = []
@@ -592,8 +606,21 @@ def imbh_tables(
             if df is not None and "TTOT" in df.columns:
                 values.extend(float(ttot) for ttot in df["TTOT"].dropna().unique())
         times = sorted(set(values)) or [1.0]
+    rbar_values = (
+        [rbar for _ in times] if rbar is None or isinstance(rbar, (int, float)) else list(rbar)
+    )
+    tidal_values = (
+        [tidal_1 for _ in times]
+        if tidal_1 is None or isinstance(tidal_1, (int, float))
+        else list(tidal_1)
+    )
     scalars = pd.DataFrame(
-        {"TTOT": times, "Time[Myr]": [float(ttot) * 10.0 for ttot in times]}
+        {
+            "TTOT": times,
+            "Time[Myr]": [float(ttot) * 10.0 for ttot in times],
+            "RBAR": rbar_values,
+            "TIDAL(1)": tidal_values,
+        }
     ).set_index("TTOT", drop=False)
     if singles is None:
         singles = pd.DataFrame(columns=["Name", "KW", "M", "TTOT", "Time[Myr]"])
@@ -695,6 +722,7 @@ def test_imbh_binary_rows_win_over_single_rows_at_same_snapshot(tmp_path: Path) 
 
 def test_imbh_merger_lineage_and_fate_summary(tmp_path: Path) -> None:
     config = make_config(tmp_path)
+    (tmp_path / "coll.13").write_text("fake")
     path0 = str(tmp_path / "snap.40_0.0.h5part")
     path1 = str(tmp_path / "snap.40_1.0.h5part")
     path2 = str(tmp_path / "snap.40_2.0.h5part")
@@ -712,7 +740,7 @@ def test_imbh_merger_lineage_and_fate_summary(tmp_path: Path) -> None:
                     "Mer NAM1": [2],
                     "Mer NAM2": [3],
                     "Mer NAM3": [np.nan],
-                    "Mer NAMC": [10],
+                    "Mer NAMC": [999],
                     "Mer KW1": [14],
                     "Mer KW2": [14],
                     "Mer KW3": [np.nan],
@@ -748,8 +776,26 @@ def test_imbh_merger_lineage_and_fate_summary(tmp_path: Path) -> None:
             times=[2.0],
         ),
     }
+    true_events = pd.DataFrame(
+        {
+            "TIME[NB]": [1.0, 2.0],
+            "Time[Myr]": [10.0, 20.0],
+            "I1": [10, 10],
+            "I2": [3, 20],
+            "K*(I1)": [14, 14],
+            "K*(I2)": [14, 14],
+            "M(I1)[M*]": [90.0, 180.0],
+            "M(I2)[M*]": [90.0, 200.0],
+            "Merger_type": ["collision", "collision"],
+        }
+    )
+    coll_processor = FakeContinuousProcessor("coll.13", true_events)
+    coal_processor = FakeContinuousProcessor("coal.24", pd.DataFrame())
     analyzer = IntermediateMassBlackHoleAnalyzer(
-        config, FakeProcessor([path0, path1, path2], tables)
+        config,
+        FakeProcessor([path0, path1, path2], tables),
+        coll13_file_processor=coll_processor,
+        coal24_file_processor=coal_processor,
     )
 
     result = analyzer.summarize_simulation("sim")
@@ -766,6 +812,185 @@ def test_imbh_merger_lineage_and_fate_summary(tmp_path: Path) -> None:
     assert objects.loc[20, "hierarchical_merger_generation"] == 2
     assert objects.loc[20, "fate_label"] == "retained_candidate"
     assert len(result["merger_events"]) == 2
+    assert result["merger_events"]["product_name"].tolist() == [10, 20]
+    assert result["merger_events"]["equal_mass_survivor_fallback"].tolist() == [True, False]
+    assert coll_processor.read_count == 1
+
+
+def test_imbh_escape_candidate_uses_tidal_radius_threshold(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    path1 = str(tmp_path / "snap.40_1.0.h5part")
+    path2 = str(tmp_path / "snap.40_2.0.h5part")
+    path3 = str(tmp_path / "snap.40_3.0.h5part")
+    for path in [path1, path2, path3]:
+        Path(path).write_text("fake")
+    tables = {
+        path1: imbh_tables(
+            singles=pd.DataFrame(
+                {
+                    "Name": [50],
+                    "KW": [14],
+                    "M": [150.0],
+                    "TTOT": [1.0],
+                    "Distance_to_cluster_center[pc]": [4.0],
+                }
+            ),
+            times=[1.0],
+            rbar=2.0,
+            tidal_1=0.5,
+        ),
+        path2: imbh_tables(
+            singles=pd.DataFrame(
+                {
+                    "Name": [50],
+                    "KW": [14],
+                    "M": [150.0],
+                    "TTOT": [2.0],
+                    "Distance_to_cluster_center[pc]": [4.01],
+                }
+            ),
+            times=[2.0],
+            rbar=2.0,
+            tidal_1=0.5,
+        ),
+        path3: imbh_tables(
+            singles=pd.DataFrame(
+                {
+                    "Name": [60],
+                    "KW": [14],
+                    "M": [160.0],
+                    "TTOT": [3.0],
+                    "Distance_to_cluster_center[pc]": [100.0],
+                }
+            ),
+            times=[3.0],
+            rbar=2.0,
+            tidal_1=0.0,
+        ),
+    }
+    analyzer = IntermediateMassBlackHoleAnalyzer(
+        config, FakeProcessor([path1, path2, path3], tables)
+    )
+
+    result = analyzer.summarize_simulation("sim")
+    snapshots = result["snapshots"].set_index(["object_name", "TTOT"])
+    objects = result["objects"].set_index("object_name")
+
+    assert snapshots.loc[(50, 1.0), "tidal_radius_pc"] == pytest.approx(2.0)
+    assert snapshots.loc[(50, 1.0), "escape_radius_pc"] == pytest.approx(4.0)
+    assert snapshots.loc[(50, 1.0), "is_escape_candidate"] == np.False_
+    assert snapshots.loc[(50, 2.0), "is_escape_candidate"] == np.True_
+    assert objects.loc[50, "fate_label"] == "escaped_candidate"
+    assert objects.loc[50, "first_escape_ttot"] == pytest.approx(2.0)
+    assert np.isnan(snapshots.loc[(60, 3.0), "tidal_radius_pc"])
+    assert snapshots.loc[(60, 3.0), "is_escape_candidate"] == np.False_
+    assert objects.loc[60, "fate_label"] == "retained_candidate"
+
+
+def test_imbh_schema_v1_snapshot_cache_triggers_rebuild(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
+    Path(hdf5_path).write_text("fake")
+    cache_dir = tmp_path / "cache" / "sim" / "intermediate_mass_black_hole"
+    cache_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "simu_name": ["sim"],
+            "object_name": [999],
+            "TTOT": [1.0],
+            "Time[Myr]": [10.0],
+            "state": ["single"],
+            "component_index": [pd.NA],
+            "mass_msun": [999.0],
+            "kw": [14],
+            "radius_pc": [np.nan],
+            "x_pc": [np.nan],
+            "y_pc": [np.nan],
+            "z_pc": [np.nan],
+            "speed_kmps": [np.nan],
+            "companion_name": [pd.NA],
+            "companion_mass_msun": [np.nan],
+            "companion_kw": [pd.NA],
+            "binary_pair_key": [pd.NA],
+            "binary_cm_name": [pd.NA],
+            "binary_total_mass_msun": [np.nan],
+            "binary_a_au": [np.nan],
+            "binary_ecc": [np.nan],
+            "tau_gw_myr": [np.nan],
+            "source_hdf5_path": [hdf5_path],
+        }
+    ).to_feather(cache_dir / "imbh_snapshots.feather")
+    (cache_dir / "imbh_snapshots.meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "scan_options": hdf5_scan.persistent_scan_options(
+                    hdf5_scan_options_from_config(config)
+                ),
+                "processed_files": {hdf5_path: {"mtime": Path(hdf5_path).stat().st_mtime}},
+            }
+        )
+    )
+    processor = FakeProcessor(
+        [hdf5_path],
+        {
+            hdf5_path: imbh_tables(
+                singles=pd.DataFrame({"Name": [1], "KW": [14], "M": [150.0], "TTOT": [1.0]}),
+                times=[1.0],
+            )
+        },
+    )
+    analyzer = IntermediateMassBlackHoleAnalyzer(config, processor)
+
+    result = analyzer.load_imbh_snapshots("sim")
+
+    assert processor.read_count == 1
+    assert result["object_name"].tolist() == [1]
+    meta = json.loads((cache_dir / "imbh_snapshots.meta.json").read_text())
+    assert meta["schema_version"] == 2
+
+
+def test_imbh_update_false_reads_new_true_merger_cache_only(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    cache_dir = tmp_path / "cache" / "sim" / "intermediate_mass_black_hole"
+    cache_dir.mkdir(parents=True)
+    new_event = pd.DataFrame(
+        [
+            {
+                "simu_name": "sim",
+                "TTOT": 1.0,
+                "Time[Myr]": 10.0,
+                "product_name": 10,
+                "parent_name_1": 10,
+                "parent_name_2": 3,
+                "parent_name_3": pd.NA,
+                "product_kw": 14,
+                "parent_kw_1": 14,
+                "parent_kw_2": 14,
+                "parent_kw_3": pd.NA,
+                "product_mass_msun": 180.0,
+                "parent_mass_1_msun": 90.0,
+                "parent_mass_2_msun": 90.0,
+                "parent_mass_3_msun": np.nan,
+                "is_imbh_product": True,
+                "has_imbh_parent": False,
+                "discarded_parent_name": 3,
+                "survivor_parent_index": 1,
+                "equal_mass_survivor_fallback": True,
+                "event_source": "collision",
+            }
+        ],
+        columns=MERGER_COLUMNS,
+    )
+    old_event = new_event.copy()
+    old_event["product_name"] = 999
+    new_event.to_feather(cache_dir / "imbh_true_merger_events.feather")
+    old_event.to_feather(cache_dir / "imbh_merger_events.feather")
+
+    analyzer = IntermediateMassBlackHoleAnalyzer(config, FakeProcessor([], {}))
+    result = analyzer.load_imbh_merger_events("sim", update=False)
+
+    assert result["product_name"].tolist() == [10]
 
 
 def test_imbh_scan_cache_reuse_tail_append_and_stale_replacement(tmp_path: Path) -> None:

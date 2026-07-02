@@ -85,7 +85,7 @@ Pass `force=True` to rebuild it from `lagr.7`.
 
 ### `dragon3_pipelines.analysis.IntermediateMassBlackHoleAnalyzer`
 
-Scan HDF5 snapshots for intermediate-mass black hole candidates, defined as `KW == 14` and `100 < mass < 1e5` solar mass. Single-star candidates use `M`; binary components use `Bin M1*` and `Bin M2*`.
+Scan HDF5 snapshots for intermediate-mass black hole candidates, defined as `KW == 14` and `100 < mass < 1e5` solar mass. Single-star candidates use `M`; binary components use `Bin M1*` and `Bin M2*`. Physical merger lineage is loaded from the concatenated `coll.13` and `coal.24` continuous files, not from the HDF5 `mergers` table.
 
 ```python
 from dragon3_pipelines.analysis import IntermediateMassBlackHoleAnalyzer
@@ -98,7 +98,7 @@ snapshots = analyzer.load_imbh_snapshots("20sb")
 events = analyzer.load_imbh_merger_events("20sb")
 ```
 
-`summarize_simulation()` returns `summary`, `objects`, `snapshots`, and `merger_events`. Results are cached under `intermediate_mass_black_hole` as `imbh_snapshots.feather` and `imbh_merger_events.feather`.
+`summarize_simulation()` returns `summary`, `objects`, `snapshots`, and `merger_events`. Results are cached under `intermediate_mass_black_hole` as `imbh_snapshots.feather` and `imbh_true_merger_events.feather`.
 
 ### `dragon3_pipelines.analysis.hdf5_scan.HDF5ScanSession`
 
