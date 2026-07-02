@@ -22,6 +22,14 @@ Install with development dependencies:
 pip install -e ".[dev]"
 ```
 
+Run the shared CI test entrypoint:
+
+```bash
+./scripts/ci.sh
+```
+
+The CI script runs pytest in parallel with pytest-xdist, using at most 8 workers.
+
 ## Quick Start
 
 ### Using the Command Line
