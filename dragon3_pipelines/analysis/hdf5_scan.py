@@ -75,6 +75,18 @@ def ttot_matches_sample(ttot: float, sample_every_nb_time: float | None) -> bool
     return bool(np.isclose(ratio, round(ratio), rtol=0.0, atol=1e-9))
 
 
+def ttot_sample_mask(
+    values: Sequence[float] | np.ndarray | pd.Series | pd.Index,
+    sample_every_nb_time: float | None,
+) -> np.ndarray:
+    """Return a vectorized mask for values lying on the NB-time sample grid."""
+    values_array = np.asarray(values, dtype=float)
+    if sample_every_nb_time is None or sample_every_nb_time <= 0:
+        return np.ones(values_array.shape, dtype=bool)
+    ratio = values_array / float(sample_every_nb_time)
+    return np.isclose(ratio, np.rint(ratio), rtol=0.0, atol=1e-9)
+
+
 class HDF5ScanTask(Protocol):
     """Protocol implemented by small analysis reductions over HDF5 files."""
 
@@ -197,7 +209,6 @@ class HDF5ScanRunner:
                 state["cache_df"] = task.merge_file_result(
                     state["cache_df"], hdf5_path, task_result
                 )
-                state["cache_df"] = task.finalize_cache(state["cache_df"])
                 state["processed_files"][hdf5_path] = task_result["file_meta"]
 
         output: Dict[str, pd.DataFrame] = {}
@@ -361,19 +372,11 @@ def _filter_df_dict_by_sample(
             filtered[table_name] = df
             continue
         if "TTOT" in df.columns:
-            mask = (
-                df["TTOT"]
-                .astype(float)
-                .map(lambda value: ttot_matches_sample(value, sample_every_nb_time))
-            )
-            filtered[table_name] = df.loc[mask].copy()
+            mask = ttot_sample_mask(df["TTOT"].to_numpy(dtype=float), sample_every_nb_time)
+            filtered[table_name] = df if bool(mask.all()) else df.loc[mask].copy()
         elif table_name == "scalars":
-            mask = (
-                pd.Index(df.index)
-                .astype(float)
-                .map(lambda value: ttot_matches_sample(value, sample_every_nb_time))
-            )
-            filtered[table_name] = df.loc[mask].copy()
+            mask = ttot_sample_mask(pd.Index(df.index).to_numpy(dtype=float), sample_every_nb_time)
+            filtered[table_name] = df if bool(mask.all()) else df.loc[mask].copy()
         else:
             filtered[table_name] = df
     return filtered

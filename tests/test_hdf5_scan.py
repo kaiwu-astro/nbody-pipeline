@@ -324,6 +324,31 @@ def test_scan_backed_analysis_scan_options_merge_and_validate(tmp_path: Path) ->
     assert hdf5_scan_options_from_config(config).wait_age_hour == 0
 
 
+def test_ttot_sample_mask_matches_scalar_sample_check() -> None:
+    values = np.array([0.0, 1.0, 1.5, 2.0, np.nan])
+
+    mask = hdf5_scan.ttot_sample_mask(values, 1.0)
+
+    expected = [
+        hdf5_scan.ttot_matches_sample(value, 1.0) if not np.isnan(value) else False
+        for value in values
+    ]
+    assert mask.tolist() == expected
+
+
+def test_filter_df_dict_by_sample_avoids_copy_when_all_rows_match() -> None:
+    scalars = pd.DataFrame({"TTOT": [1.0, 2.0]}).set_index("TTOT", drop=False)
+    binaries = pd.DataFrame({"TTOT": [1.0, 1.0, 2.0]})
+
+    filtered = hdf5_scan._filter_df_dict_by_sample(
+        {"scalars": scalars, "binaries": binaries},
+        1.0,
+    )
+
+    assert filtered["scalars"] is scalars
+    assert filtered["binaries"] is binaries
+
+
 def test_scan_backed_analysis_cache_only_path_does_not_touch_hdf5(tmp_path: Path) -> None:
     analysis = ScanBackedAnalysisForTest(make_config(tmp_path), FakeProcessor([], {}))
     task = MetaTask("cached", {}, pd.DataFrame({"value": [2, 1]}))
