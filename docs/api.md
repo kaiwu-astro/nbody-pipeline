@@ -67,6 +67,23 @@ df = BTypeBinaryExtractor(config).load_b_type_binaries("20sb")
 
 The returned table preserves the processed binary rows and adds `b_type_member1`, `b_type_member2`, `b_type_member_count`, `b_type_pair_key`, and `is_primordial_binary`. Results are cached under `paths.analysis_cache_dir`.
 
+### `dragon3_pipelines.analysis.IntermediateMassBlackHoleAnalyzer`
+
+Scan HDF5 snapshots for intermediate-mass black hole candidates, defined as `KW == 14` and `100 < mass < 1e5` solar mass. Single-star candidates use `M`; binary components use `Bin M1*` and `Bin M2*`.
+
+```python
+from dragon3_pipelines.analysis import IntermediateMassBlackHoleAnalyzer
+from dragon3_pipelines.config import ConfigManager
+
+config = ConfigManager()
+analyzer = IntermediateMassBlackHoleAnalyzer(config)
+summary = analyzer.summarize_simulation("20sb")
+snapshots = analyzer.load_imbh_snapshots("20sb")
+events = analyzer.load_imbh_merger_events("20sb")
+```
+
+`summarize_simulation()` returns `summary`, `objects`, `snapshots`, and `merger_events`. Results are cached under `intermediate_mass_black_hole` as `imbh_snapshots.feather` and `imbh_merger_events.feather`.
+
 ### `dragon3_pipelines.analysis.hdf5_scan.HDF5ScanSession`
 
 Batch compatible HDF5 data-reduction tasks so each HDF5 file is read once per simulation/options group.

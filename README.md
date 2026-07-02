@@ -166,6 +166,20 @@ ns_binaries = extractor.load_binaries_with_stellar_type("my_sim", kw=13)
 
 The returned table contains the complete processed binary rows for every snapshot where either binary component matches the requested stellar type or KW code.
 
+### Analyze IMBH Candidates
+
+```python
+from dragon3_pipelines.analysis import IntermediateMassBlackHoleAnalyzer
+
+imbh = IntermediateMassBlackHoleAnalyzer(config)
+result = imbh.summarize_simulation("my_sim")
+objects = result["objects"]
+snapshots = result["snapshots"]
+merger_events = result["merger_events"]
+```
+
+IMBH candidates are black holes with `100 < mass < 1e5` solar mass. The scan caches per-snapshot candidate rows and linked merger events under `intermediate_mass_black_hole`.
+
 HDF5 data-reduction tasks for getting macroscopic data can be batched with `HDF5ScanSession` so compatible tasks share HDF5 reads:
 (here macroscopic data from HDF5 files means a few data points per HDF5 snapshot, such as center-of-mass info, largrangian data; in contract with many data points per snapshot such as X and V of all single stars)
 

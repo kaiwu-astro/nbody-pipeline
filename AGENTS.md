@@ -316,6 +316,7 @@ analysis/data-reduction 产生的中间结果缓存统一放在 `paths.analysis_
 - `current_lagrangian`
 - `compact_binary_count`
 - `galactic_orbit`
+- `intermediate_mass_black_hole`
 
 代码中不要手写拼接这些目录；应使用 `dragon3_pipelines.analysis.cache_paths.analysis_cache_dir(config, simu_name, feature)` 以及该模块中定义的 feature 常量。`ConfigManager` 会派生：
 
