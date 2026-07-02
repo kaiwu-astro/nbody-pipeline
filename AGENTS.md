@@ -188,16 +188,6 @@ Agent Coding 完成代码修改后，必要测试流程是运行项目统一 CI 
 
 该脚本是 GitHub Actions 与本地开发共用的测试入口，会使用 pytest-xdist 并行运行测试，worker 数自动选择但最多 8 个，并默认将 BLAS/OMP 相关线程数限制为 1（可通过已有环境变量覆盖）。
 
-运行所有测试：
-```bash
-pytest tests/ -n auto --maxprocesses=8 --dist=loadfile -v
-```
-
-运行测试并生成覆盖率报告：
-```bash
-pytest tests/ -n auto --maxprocesses=8 --dist=loadfile -v --cov=dragon3_pipelines --cov-report=xml --cov-report=term
-```
-
 运行特定测试文件：
 ```bash
 pytest tests/test_config.py -v
