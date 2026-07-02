@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from dragon3_pipelines.analysis import (
         BTypeBinaryExtractor,
         BinaryStellarTypeExtractor,
+        InitialTotalMassAnalyzer,
         IntermediateMassBlackHoleAnalyzer,
         PrimordialBinaryIdentifier,
     )
@@ -27,12 +28,14 @@ def __getattr__(name: str) -> Any:
     if name in {
         "BTypeBinaryExtractor",
         "BinaryStellarTypeExtractor",
+        "InitialTotalMassAnalyzer",
         "IntermediateMassBlackHoleAnalyzer",
         "PrimordialBinaryIdentifier",
     }:
         from dragon3_pipelines.analysis import (
             BTypeBinaryExtractor,
             BinaryStellarTypeExtractor,
+            InitialTotalMassAnalyzer,
             IntermediateMassBlackHoleAnalyzer,
             PrimordialBinaryIdentifier,
         )
@@ -40,6 +43,7 @@ def __getattr__(name: str) -> Any:
         exported = {
             "BTypeBinaryExtractor": BTypeBinaryExtractor,
             "BinaryStellarTypeExtractor": BinaryStellarTypeExtractor,
+            "InitialTotalMassAnalyzer": InitialTotalMassAnalyzer,
             "IntermediateMassBlackHoleAnalyzer": IntermediateMassBlackHoleAnalyzer,
             "PrimordialBinaryIdentifier": PrimordialBinaryIdentifier,
         }
@@ -55,6 +59,7 @@ __all__ = [
     "SimulationPlotter",
     "BTypeBinaryExtractor",
     "BinaryStellarTypeExtractor",
+    "InitialTotalMassAnalyzer",
     "IntermediateMassBlackHoleAnalyzer",
     "PrimordialBinaryIdentifier",
 ]

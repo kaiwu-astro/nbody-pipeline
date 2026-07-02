@@ -80,3 +80,20 @@ class LagrFileProcessor(ContinousFileProcessor):
             )
 
         return l7df_sns
+
+    @staticmethod
+    def build_total_mass_df(l7df_sns: pd.DataFrame) -> pd.DataFrame:
+        """Build total mass rows from the 100% Lagrangian shell."""
+        percent = "100%"
+        avmass = l7df_sns[(l7df_sns["Metric"] == "avmass") & (l7df_sns["%"] == percent)]
+        nshell = l7df_sns[(l7df_sns["Metric"] == "nshell") & (l7df_sns["%"] == percent)]
+
+        total_mass_df = pd.merge(
+            avmass[["Time[Myr]", "Value"]],
+            nshell[["Time[Myr]", "Value"]],
+            on="Time[Myr]",
+            how="inner",
+            suffixes=("_avmass", "_nshell"),
+        )
+        total_mass_df["total_mass"] = total_mass_df["Value_avmass"] * total_mass_df["Value_nshell"]
+        return total_mass_df

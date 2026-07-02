@@ -7,6 +7,7 @@ from dragon3_pipelines.analysis.compact_binary_counter import CompactBinaryCount
 from dragon3_pipelines.analysis.b_type_binary import BTypeBinaryExtractor
 from dragon3_pipelines.analysis.binary_stellar_type import BinaryStellarTypeExtractor
 from dragon3_pipelines.analysis.primordial_binary import PrimordialBinaryIdentifier
+from dragon3_pipelines.analysis.initial_total_mass import InitialTotalMassAnalyzer
 from dragon3_pipelines.analysis.intermediate_mass_black_hole import (
     IntermediateMassBlackHoleAnalyzer,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "BTypeBinaryExtractor",
     "BinaryStellarTypeExtractor",
     "PrimordialBinaryIdentifier",
+    "InitialTotalMassAnalyzer",
     "IntermediateMassBlackHoleAnalyzer",
     "tau_gw",
     "compute_binary_orbit_relative_positions",

@@ -18,6 +18,7 @@ from dragon3_pipelines.analysis.intermediate_mass_black_hole import (
     IntermediateMassBlackHoleAnalyzer,
 )
 from dragon3_pipelines.analysis import hdf5_scan
+from dragon3_pipelines.analysis.initial_total_mass import InitialTotalMassAnalyzer
 from dragon3_pipelines.analysis.primordial_binary import PrimordialBinaryIdentifier
 from dragon3_pipelines.analysis.hdf5_scan import (
     HDF5ScanJob,
@@ -965,6 +966,55 @@ def test_primordial_identifier_reuses_fresh_cache_without_rereading_hdf5(tmp_pat
     pd.testing.assert_frame_equal(first, second)
 
 
+def test_primordial_identifier_reuses_existing_cache_even_if_hdf5_changes(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    hdf5_path = tmp_path / "snap.40_0.0.h5part"
+    hdf5_path.write_text("fake")
+    binaries = pd.DataFrame({"Bin Name1": [1], "Bin Name2": [2], "TTOT": [0.0]})
+    identifier = PrimordialBinaryIdentifier(config)
+    fake_processor = FakeProcessor([str(hdf5_path)], make_primordial_tables(hdf5_path, binaries))
+    identifier.hdf5_file_processor = fake_processor
+
+    first = identifier.load_primordial_binaries("sim", wait_age_hour=0)
+    fake_processor.tables_by_path[str(hdf5_path)] = make_primordial_tables(
+        hdf5_path,
+        pd.DataFrame({"Bin Name1": [3], "Bin Name2": [4], "TTOT": [0.0]}),
+    )[str(hdf5_path)]
+    hdf5_path.write_text("changed")
+    os.utime(hdf5_path, (hdf5_path.stat().st_atime + 5, hdf5_path.stat().st_mtime + 5))
+    second = identifier.load_primordial_binaries("sim", wait_age_hour=0)
+
+    assert fake_processor.read_count == 1
+    pd.testing.assert_frame_equal(first, second)
+
+
+def test_primordial_identifier_force_recomputes_existing_cache(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    hdf5_path = tmp_path / "snap.40_0.0.h5part"
+    hdf5_path.write_text("fake")
+    identifier = PrimordialBinaryIdentifier(config)
+    fake_processor = FakeProcessor(
+        [str(hdf5_path)],
+        make_primordial_tables(
+            hdf5_path, pd.DataFrame({"Bin Name1": [1], "Bin Name2": [2], "TTOT": [0.0]})
+        ),
+    )
+    identifier.hdf5_file_processor = fake_processor
+
+    first = identifier.load_primordial_binaries("sim", wait_age_hour=0)
+    fake_processor.tables_by_path[str(hdf5_path)] = make_primordial_tables(
+        hdf5_path,
+        pd.DataFrame({"Bin Name1": [3], "Bin Name2": [4], "TTOT": [0.0]}),
+    )[str(hdf5_path)]
+    second = identifier.load_primordial_binaries("sim", wait_age_hour=0, force=True)
+
+    assert fake_processor.read_count == 2
+    assert first["primordial_pair_key"].tolist() == ["1-2"]
+    assert second["primordial_pair_key"].tolist() == ["3-4"]
+
+
 def test_primordial_identifier_update_false_reads_cache(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     hdf5_path = tmp_path / "snap.40_0.0.h5part"
@@ -1017,6 +1067,103 @@ def test_primordial_identifier_fails_when_zero_ttot_snapshot_missing(tmp_path: P
 
     with pytest.raises(ValueError, match="TTOT == 0.0"):
         identifier.load_primordial_binaries("sim", wait_age_hour=0)
+
+
+class FakeLagrProcessor:
+    def __init__(self, l7df_sns: pd.DataFrame):
+        self.l7df_sns = l7df_sns
+        self.read_count = 0
+
+    def load_sns_friendly_data(self, simu_name: str) -> pd.DataFrame:
+        self.read_count += 1
+        return self.l7df_sns
+
+
+def test_initial_total_mass_analyzer_computes_and_caches_scalar(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    lagr_df = pd.DataFrame(
+        [
+            {"Time[Myr]": 0.0, "%": "100%", "Metric": "avmass", "Value": 2.0},
+            {"Time[Myr]": 1.0, "%": "100%", "Metric": "avmass", "Value": 3.0},
+            {"Time[Myr]": 0.0, "%": "100%", "Metric": "nshell", "Value": 10.0},
+            {"Time[Myr]": 1.0, "%": "100%", "Metric": "nshell", "Value": 20.0},
+        ]
+    )
+    analyzer = InitialTotalMassAnalyzer(config)
+    fake_lagr = FakeLagrProcessor(lagr_df)
+    analyzer.lagr_file_processor = fake_lagr
+
+    result = analyzer.get_initial_total_mass_msun("sim")
+
+    assert result == 20.0
+    assert fake_lagr.read_count == 1
+    cache_path = tmp_path / "cache" / "sim" / "initial_total_mass" / "initial_total_mass.feather"
+    cached = pd.read_feather(cache_path)
+    assert cached.to_dict(orient="records") == [{"initial_total_mass_msun": 20.0}]
+
+
+def test_initial_total_mass_analyzer_reuses_cache_without_reading_lagr(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    lagr_df = pd.DataFrame(
+        [
+            {"Time[Myr]": 0.0, "%": "100%", "Metric": "avmass", "Value": 2.0},
+            {"Time[Myr]": 0.0, "%": "100%", "Metric": "nshell", "Value": 10.0},
+        ]
+    )
+    analyzer = InitialTotalMassAnalyzer(config)
+    fake_lagr = FakeLagrProcessor(lagr_df)
+    analyzer.lagr_file_processor = fake_lagr
+
+    first = analyzer.get_initial_total_mass_msun("sim")
+    fake_lagr.l7df_sns = pd.DataFrame()
+    second = analyzer.get_initial_total_mass_msun("sim")
+
+    assert first == 20.0
+    assert second == 20.0
+    assert fake_lagr.read_count == 1
+
+
+def test_initial_total_mass_analyzer_force_recomputes_cache(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    analyzer = InitialTotalMassAnalyzer(config)
+    fake_lagr = FakeLagrProcessor(
+        pd.DataFrame(
+            [
+                {"Time[Myr]": 0.0, "%": "100%", "Metric": "avmass", "Value": 2.0},
+                {"Time[Myr]": 0.0, "%": "100%", "Metric": "nshell", "Value": 10.0},
+            ]
+        )
+    )
+    analyzer.lagr_file_processor = fake_lagr
+
+    first = analyzer.get_initial_total_mass_msun("sim")
+    fake_lagr.l7df_sns = pd.DataFrame(
+        [
+            {"Time[Myr]": 0.0, "%": "100%", "Metric": "avmass", "Value": 3.0},
+            {"Time[Myr]": 0.0, "%": "100%", "Metric": "nshell", "Value": 10.0},
+        ]
+    )
+    second = analyzer.get_initial_total_mass_msun("sim", force=True)
+
+    assert first == 20.0
+    assert second == 30.0
+    assert fake_lagr.read_count == 2
+
+
+def test_initial_total_mass_analyzer_errors_without_unique_zero_time_row(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    analyzer = InitialTotalMassAnalyzer(config)
+    analyzer.lagr_file_processor = FakeLagrProcessor(
+        pd.DataFrame(
+            [
+                {"Time[Myr]": 1.0, "%": "100%", "Metric": "avmass", "Value": 2.0},
+                {"Time[Myr]": 1.0, "%": "100%", "Metric": "nshell", "Value": 10.0},
+            ]
+        )
+    )
+
+    with pytest.raises(ValueError, match="Time\\[Myr\\] == 0.0"):
+        analyzer.get_initial_total_mass_msun("sim")
 
 
 def test_b_type_extractor_filters_members_marks_primordial_and_writes_meta(

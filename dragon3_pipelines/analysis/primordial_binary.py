@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-import json
-import logging
 import os
-from pathlib import Path
 from typing import Any, Dict
 
 import pandas as pd
 
-from dragon3_pipelines.analysis.cache_paths import PRIMORDIAL_BINARY_FEATURE, analysis_cache_dir
+from dragon3_pipelines.analysis.cache_paths import PRIMORDIAL_BINARY_FEATURE
+from dragon3_pipelines.analysis.once import SimulationOnceAnalysisBase
 from dragon3_pipelines.io import HDF5FileProcessor
 
-logger = logging.getLogger(__name__)
 
-
-class PrimordialBinaryIdentifier:
+class PrimordialBinaryIdentifier(SimulationOnceAnalysisBase):
     """Load primordial binaries from the strict ``TTOT == 0.0`` binary snapshot."""
 
     SCHEMA_VERSION = 1
@@ -24,7 +20,12 @@ class PrimordialBinaryIdentifier:
     TTOT_RULE = "binaries['TTOT'].astype(float) == 0.0"
 
     def __init__(self, config_manager: Any) -> None:
-        self.config = config_manager
+        super().__init__(
+            config_manager,
+            feature=PRIMORDIAL_BINARY_FEATURE,
+            cache_filename="primordial_binaries.feather",
+            meta_filename="primordial_binaries.meta.json",
+        )
         self.hdf5_file_processor = HDF5FileProcessor(config_manager)
 
     def load_primordial_binaries(
@@ -35,10 +36,29 @@ class PrimordialBinaryIdentifier:
         wait_age_hour: int | float | None = None,
         use_hdf5_cache: bool | None = None,
         exclude_bad_dirname: bool = True,
+        force: bool = False,
     ) -> pd.DataFrame:
         """Return the full cached table of primordial binaries for one simulation."""
-        if not update:
-            return self._read_cache(simu_name)
+        return self.load_or_compute(
+            simu_name,
+            update=update,
+            force=force,
+            compute=lambda: self._compute_primordial_binaries(
+                simu_name,
+                wait_age_hour=wait_age_hour,
+                use_hdf5_cache=use_hdf5_cache,
+                exclude_bad_dirname=exclude_bad_dirname,
+            ),
+        )
+
+    def _compute_primordial_binaries(
+        self,
+        simu_name: str,
+        *,
+        wait_age_hour: int | float | None,
+        use_hdf5_cache: bool | None,
+        exclude_bad_dirname: bool,
+    ) -> tuple[pd.DataFrame, dict[str, Any]]:
         hdf5_config = getattr(self.config, "hdf5", {}) or {}
         file_selection = hdf5_config.get("file_selection", {})
         table_cache = hdf5_config.get("table_cache", {})
@@ -53,10 +73,6 @@ class PrimordialBinaryIdentifier:
             exclude_bad_dirname=exclude_bad_dirname,
         )
         source_mtime = os.path.getmtime(first_hdf5_path)
-        meta = self._read_meta(simu_name)
-        if self._cache_is_fresh(simu_name, meta, first_hdf5_path, source_mtime):
-            return self._read_cache(simu_name)
-
         df_dict = self.hdf5_file_processor.read_tables(
             first_hdf5_path,
             simu_name,
@@ -68,19 +84,14 @@ class PrimordialBinaryIdentifier:
         scalars = df_dict.get("scalars", pd.DataFrame())
         discovered_ttot_values = self._ttot_values(scalars)
         primordial = self._identify_primordial_binaries(binaries)
-        self._write_cache_and_meta(
-            simu_name,
-            primordial,
-            {
-                "schema_version": self.SCHEMA_VERSION,
-                "source_hdf5_path": first_hdf5_path,
-                "source_mtime": source_mtime,
-                "discovered_ttot_values": discovered_ttot_values,
-                "row_count": int(len(primordial)),
-                "ttot_rule": self.TTOT_RULE,
-            },
-        )
-        return primordial
+        return primordial, {
+            "schema_version": self.SCHEMA_VERSION,
+            "source_hdf5_path": first_hdf5_path,
+            "source_mtime": source_mtime,
+            "discovered_ttot_values": discovered_ttot_values,
+            "row_count": int(len(primordial)),
+            "ttot_rule": self.TTOT_RULE,
+        }
 
     def _first_hdf5_path(
         self,
@@ -136,58 +147,6 @@ class PrimordialBinaryIdentifier:
         ]
         primordial["is_primordial_binary"] = True
         return primordial.reset_index(drop=True)
-
-    def _cache_dir(self, simu_name: str) -> Path:
-        return analysis_cache_dir(self.config, simu_name, PRIMORDIAL_BINARY_FEATURE)
-
-    def _cache_path(self, simu_name: str) -> Path:
-        return self._cache_dir(simu_name) / "primordial_binaries.feather"
-
-    def _meta_path(self, simu_name: str) -> Path:
-        return self._cache_dir(simu_name) / "primordial_binaries.meta.json"
-
-    def _read_cache(self, simu_name: str) -> pd.DataFrame:
-        cache_path = self._cache_path(simu_name)
-        if not cache_path.exists():
-            return pd.DataFrame()
-        return pd.read_feather(cache_path)
-
-    def _read_meta(self, simu_name: str) -> Dict[str, Any]:
-        meta_path = self._meta_path(simu_name)
-        if not meta_path.exists():
-            return {}
-        try:
-            return json.loads(meta_path.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
-            logger.warning("Failed to read primordial binary metadata %s: %r", meta_path, exc)
-            return {}
-
-    def _cache_is_fresh(
-        self,
-        simu_name: str,
-        meta: Dict[str, Any],
-        first_hdf5_path: str,
-        source_mtime: float,
-    ) -> bool:
-        return (
-            self._cache_path(simu_name).exists()
-            and meta.get("schema_version") == self.SCHEMA_VERSION
-            and meta.get("source_hdf5_path") == first_hdf5_path
-            and meta.get("source_mtime") == source_mtime
-        )
-
-    def _write_cache_and_meta(self, simu_name: str, df: pd.DataFrame, meta: Dict[str, Any]) -> None:
-        cache_dir = self._cache_dir(simu_name)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_path = self._cache_path(simu_name)
-        meta_path = self._meta_path(simu_name)
-        tmp_cache_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
-        tmp_meta_path = meta_path.with_suffix(meta_path.suffix + ".tmp")
-
-        df.to_feather(tmp_cache_path)
-        os.replace(tmp_cache_path, cache_path)
-        tmp_meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
-        os.replace(tmp_meta_path, meta_path)
 
     def _ttot_values(self, scalars: pd.DataFrame) -> list[float]:
         if "TTOT" not in scalars.columns:

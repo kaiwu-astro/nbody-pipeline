@@ -56,7 +56,7 @@ bash dragon3_pipelines/scripts/dragon3_jpg_to_movie.sh create help
 from dragon3_pipelines import main, SimulationPlotter
 from dragon3_pipelines.config import ConfigManager
 from dragon3_pipelines.io import HDF5FileProcessor
-from dragon3_pipelines.analysis import ParticleTracker
+from dragon3_pipelines.analysis import InitialTotalMassAnalyzer, ParticleTracker
 from dragon3_pipelines.visualization import SingleStarVisualizer
 
 # Create custom configuration
@@ -65,6 +65,9 @@ config.processes_count = 20
 
 # Use visualizers
 visualizer = SingleStarVisualizer(config)
+
+# Read the cached initial total mass from lagr.7
+initial_mass_msun = InitialTotalMassAnalyzer(config).get_initial_total_mass_msun("20sb")
 ```
 
 ## Configuration

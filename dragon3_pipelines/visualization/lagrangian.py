@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+from dragon3_pipelines.io import LagrFileProcessor
 from dragon3_pipelines.visualization.base import BaseContinousFileVisualizer, add_grid
 
 logger = logging.getLogger(__name__)
@@ -148,19 +149,7 @@ class LagrVisualizer(BaseContinousFileVisualizer):
             f"{self.config.plot_dir}/{self.config.figname_prefix[simu_name]}_total_mass.pdf"
         )
 
-        percent = "100%"
-        avmass = l7df_sns[(l7df_sns["Metric"] == "avmass") & (l7df_sns["%"] == percent)]
-        nshell = l7df_sns[(l7df_sns["Metric"] == "nshell") & (l7df_sns["%"] == percent)]
-
-        total_mass_df = pd.merge(
-            avmass[["Time[Myr]", "Value"]],
-            nshell[["Time[Myr]", "Value"]],
-            on="Time[Myr]",
-            how="inner",
-            suffixes=("_avmass", "_nshell"),
-        )
-        total_mass_df = total_mass_df[total_mass_df["Time[Myr]"] > 0].copy()
-        total_mass_df["total_mass"] = total_mass_df["Value_avmass"] * total_mass_df["Value_nshell"]
+        total_mass_df = LagrFileProcessor.build_total_mass_df(l7df_sns)
 
         fig, ax = plt.subplots()
         sns.lineplot(data=total_mass_df, x="Time[Myr]", y="total_mass", ax=ax)

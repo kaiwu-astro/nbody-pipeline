@@ -14,6 +14,7 @@ AnalysisCacheFeature = Literal[
     "compact_binary_count",
     "galactic_orbit",
     "intermediate_mass_black_hole",
+    "initial_total_mass",
 ]
 
 PARTICLE_DF_FEATURE: AnalysisCacheFeature = "particle_df"
@@ -24,6 +25,7 @@ CURRENT_LAGRANGIAN_FEATURE: AnalysisCacheFeature = "current_lagrangian"
 COMPACT_BINARY_COUNT_FEATURE: AnalysisCacheFeature = "compact_binary_count"
 GALACTIC_ORBIT_FEATURE: AnalysisCacheFeature = "galactic_orbit"
 INTERMEDIATE_MASS_BLACK_HOLE_FEATURE: AnalysisCacheFeature = "intermediate_mass_black_hole"
+INITIAL_TOTAL_MASS_FEATURE: AnalysisCacheFeature = "initial_total_mass"
 
 
 def analysis_cache_dir(config: Any, simu_name: str, feature: AnalysisCacheFeature) -> Path:

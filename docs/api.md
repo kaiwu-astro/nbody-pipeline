@@ -67,6 +67,22 @@ df = BTypeBinaryExtractor(config).load_b_type_binaries("20sb")
 
 The returned table preserves the processed binary rows and adds `b_type_member1`, `b_type_member2`, `b_type_member_count`, `b_type_pair_key`, and `is_primordial_binary`. Results are cached under `paths.analysis_cache_dir`.
 
+### `dragon3_pipelines.analysis.InitialTotalMassAnalyzer`
+
+Load the initial cluster mass from `lagr.7` using the `100%` shell total mass:
+`total_mass = avmass * nshell` at strict `Time[Myr] == 0.0`.
+
+```python
+from dragon3_pipelines.analysis import InitialTotalMassAnalyzer
+from dragon3_pipelines.config import ConfigManager
+
+config = ConfigManager()
+mass_msun = InitialTotalMassAnalyzer(config).get_initial_total_mass_msun("20sb")
+```
+
+The scalar result is cached under `initial_total_mass/initial_total_mass.feather`.
+Pass `force=True` to rebuild it from `lagr.7`.
+
 ### `dragon3_pipelines.analysis.IntermediateMassBlackHoleAnalyzer`
 
 Scan HDF5 snapshots for intermediate-mass black hole candidates, defined as `KW == 14` and `100 < mass < 1e5` solar mass. Single-star candidates use `M`; binary components use `Bin M1*` and `Bin M2*`.

@@ -152,6 +152,26 @@ class TestLagrFunctions:
         assert "0.1%" in sns_df["%"].values
         assert "0.3%" in sns_df["%"].values
 
+    def test_build_total_mass_df_uses_100_percent_and_keeps_zero_time(self):
+        """Total mass uses only the 100% shell and keeps Time[Myr] == 0.0."""
+        lagr_df = pd.DataFrame(
+            [
+                {"Time[Myr]": 0.0, "%": "100%", "Metric": "avmass", "Value": 2.0},
+                {"Time[Myr]": 1.0, "%": "100%", "Metric": "avmass", "Value": 3.0},
+                {"Time[Myr]": 0.0, "%": "100%", "Metric": "nshell", "Value": 10.0},
+                {"Time[Myr]": 1.0, "%": "100%", "Metric": "nshell", "Value": 20.0},
+                {"Time[Myr]": 0.0, "%": "90%", "Metric": "avmass", "Value": 100.0},
+                {"Time[Myr]": 0.0, "%": "90%", "Metric": "nshell", "Value": 100.0},
+            ]
+        )
+
+        total_mass_df = LagrFileProcessor.build_total_mass_df(lagr_df)
+
+        assert total_mass_df["Time[Myr]"].tolist() == [0.0, 1.0]
+        assert total_mass_df["Value_avmass"].tolist() == [2.0, 3.0]
+        assert total_mass_df["Value_nshell"].tolist() == [10.0, 20.0]
+        assert total_mass_df["total_mass"].tolist() == [20.0, 60.0]
+
 
 class TestTauGW:
     """Test gravitational wave merger timescale function"""
