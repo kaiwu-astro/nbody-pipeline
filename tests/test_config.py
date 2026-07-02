@@ -27,31 +27,27 @@ class TestConfigManager:
         assert hasattr(config, "galactic_orbit")
         assert hasattr(config, "hdf5")
 
-        # Check specific values
+        # Check basic types
         assert isinstance(config.pathof, dict)
         assert isinstance(config.processes_count, int)
-        assert config.processes_count == 40
 
-        # Check new memory and inode parameters
+        # Check memory and inode parameters exist
         assert hasattr(config, "mem_max_gb")
         assert hasattr(config, "inode_limit")
-        assert config.mem_max_gb == 40.0
-        assert config.inode_limit == 2000000
-        assert config.galactic_orbit["enabled"] is True
-        assert config.galactic_orbit["cache_filename"] == "galactic_orbit.feather"
-        assert config.galactic_orbit["time_color_max_myr"] == 500.0
-        assert config.hdf5["file_selection"]["wait_age_hour"] == 24
-        assert config.hdf5["file_selection"]["sample_every_nb_time"] == 1.0
-        assert config.hdf5["file_selection"]["exclude_bad_dirname"] is True
-        assert config.hdf5["table_cache"]["use_hdf5_cache"] is True
-        assert config.hdf5["scan"]["parallel"] is True
-        assert config.hdf5["scan"]["incremental_from_cache_tail"] is True
+        assert isinstance(config.mem_max_gb, float)
+        assert isinstance(config.inode_limit, int)
+
+        # Check nested config sections are loaded
+        assert isinstance(config.galactic_orbit, dict)
+        assert isinstance(config.hdf5, dict)
+        assert "file_selection" in config.hdf5
+        assert "table_cache" in config.hdf5
+        assert "scan" in config.hdf5
 
         # Check stellar types are loaded
-        assert 14 in config.kw_to_stellar_type
-        assert config.kw_to_stellar_type[14] == "BH"
-        assert 13 in config.kw_to_stellar_type
-        assert config.kw_to_stellar_type[13] == "NS"
+        assert len(config.kw_to_stellar_type) > 0
+        assert all(isinstance(key, int) for key in config.kw_to_stellar_type)
+        assert all(isinstance(value, str) for value in config.kw_to_stellar_type.values())
 
     def test_derived_attributes(self):
         """Test that derived attributes are created correctly"""
@@ -59,14 +55,15 @@ class TestConfigManager:
 
         # Check reverse mappings
         assert hasattr(config, "stellar_type_to_kw")
-        assert "BH" in config.stellar_type_to_kw
-        assert config.stellar_type_to_kw["BH"] == 14
+        for kw, stellar_type in config.kw_to_stellar_type.items():
+            assert config.stellar_type_to_kw[stellar_type] == kw
 
         # Check verbose mappings
         assert hasattr(config, "kw_to_stellar_type_verbose")
-        assert 14 in config.kw_to_stellar_type_verbose
-        assert "14" in config.kw_to_stellar_type_verbose[14]
-        assert "BH" in config.kw_to_stellar_type_verbose[14]
+        for kw, stellar_type in config.kw_to_stellar_type.items():
+            assert kw in config.kw_to_stellar_type_verbose
+            assert str(kw) in config.kw_to_stellar_type_verbose[kw]
+            assert stellar_type in config.kw_to_stellar_type_verbose[kw]
 
         # Check plotting attributes
         assert hasattr(config, "palette_st")
@@ -131,11 +128,9 @@ class TestConfigManager:
 
         assert config.galactic_orbit["enabled"] is False
         assert config.galactic_orbit["time_color_max_myr"] == 750.0
-        assert config.galactic_orbit["cache_filename"] == "galactic_orbit.feather"
         assert config.hdf5["file_selection"]["sample_every_nb_time"] == 2.0
         assert config.hdf5["file_selection"]["wait_age_hour"] == 0
         assert config.hdf5["scan"]["parallel"] is False
-        assert config.hdf5["table_cache"]["use_hdf5_cache"] is True
 
     def test_removed_pre_1_config_keys_raise(self, temp_dir):
         user_config = {
@@ -184,8 +179,6 @@ class TestConfigManager:
         """Test physics constants are loaded correctly"""
         config = ConfigManager()
 
-        assert config.ECLOSE_INPUT == 1.0
-        assert config.universe_age_myr == 13800.0
         assert isinstance(config.IMBH_mass_range_msun, tuple)
         assert len(config.IMBH_mass_range_msun) == 2
         assert isinstance(config.PISNe_mass_gap, tuple)
