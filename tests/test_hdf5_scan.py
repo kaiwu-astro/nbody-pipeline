@@ -93,13 +93,31 @@ class FakeProcessor:
         self.hdf5_paths = hdf5_paths
         self.tables_by_path = tables_by_path
         self.read_count = 0
+        self.read_paths: list[str] = []
 
     def get_all_hdf5_paths(self, *args, **kwargs):
         return self.hdf5_paths
 
     def read_tables(self, hdf5_path, simu_name, tables, columns_by_table=None, use_cache=True):
         self.read_count += 1
+        self.read_paths.append(hdf5_path)
         return {table: self.tables_by_path[hdf5_path][table] for table in tables}
+
+
+class FailingProcessor(FakeProcessor):
+    def __init__(
+        self,
+        hdf5_paths: list[str],
+        tables_by_path: dict[str, dict[str, pd.DataFrame]],
+        fail_paths: set[str],
+    ):
+        super().__init__(hdf5_paths, tables_by_path)
+        self.fail_paths = fail_paths
+
+    def read_tables(self, hdf5_path, simu_name, tables, columns_by_table=None, use_cache=True):
+        if hdf5_path in self.fail_paths:
+            raise RuntimeError(f"failed to read {hdf5_path}")
+        return super().read_tables(hdf5_path, simu_name, tables, columns_by_table, use_cache)
 
 
 class FakeContinuousProcessor:
@@ -280,6 +298,47 @@ class FakeTask:
         return cache_df
 
 
+class FileBackedTask(FakeTask):
+    def __init__(self, name: str, cache_dir: Path):
+        super().__init__(name)
+        self.cache_path = cache_dir / f"{name}.feather"
+        self.meta_path = cache_dir / f"{name}.meta.json"
+
+    def read_cache(self):
+        if not self.cache_path.exists():
+            return pd.DataFrame()
+        return pd.read_feather(self.cache_path)
+
+    def read_meta(self):
+        if not self.meta_path.exists():
+            return {}
+        return json.loads(self.meta_path.read_text())
+
+    def is_file_fresh(self, hdf5_path, meta, cache_df):
+        return hdf5_path in meta.get("processed_files", {})
+
+    def process_file(self, hdf5_path, df_dict, meta, cache_df):
+        ttot = float(df_dict["scalars"]["TTOT"].iloc[0])
+        return {
+            "rows": pd.DataFrame({"task": [self.name], "path": [hdf5_path], "TTOT": [ttot]}),
+            "file_meta": {"mtime": 1.0, "ttot": [ttot]},
+        }
+
+    def write_cache_and_meta(self, cache_df, processed_files, options):
+        self.writes += 1
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_df.to_feather(self.cache_path)
+        self.meta_path.write_text(
+            json.dumps(
+                {
+                    "scan_options": hdf5_scan.persistent_scan_options(options),
+                    "processed_files": processed_files,
+                },
+                sort_keys=True,
+            )
+        )
+
+
 class MetaTask(FakeTask):
     def __init__(self, name: str, meta: dict, cache_df: pd.DataFrame | None = None):
         super().__init__(name)
@@ -312,6 +371,7 @@ def test_scan_backed_analysis_scan_options_merge_and_validate(tmp_path: Path) ->
     config = make_config(tmp_path)
     config.hdf5["file_selection"]["sample_every_nb_time"] = 2.0
     config.hdf5["scan"]["parallel"] = True
+    config.hdf5["scan"]["checkpoint_every_files"] = 7
     config.hdf5["table_cache"]["use_hdf5_cache"] = False
     analysis = ScanBackedAnalysisForTest(config, FakeProcessor([], {}))
 
@@ -319,9 +379,18 @@ def test_scan_backed_analysis_scan_options_merge_and_validate(tmp_path: Path) ->
     assert options.sample_every_nb_time == 2.0
     assert options.parallel is True
     assert options.use_hdf5_cache is False
+    assert options.checkpoint_every_files == 7
     assert not hasattr(options, "processes")
     assert options.force is True
     assert hdf5_scan_options_from_config(config).wait_age_hour == 0
+
+
+def test_persistent_scan_options_ignore_checkpoint_frequency() -> None:
+    first = hdf5_scan.persistent_scan_options(HDF5ScanOptions(checkpoint_every_files=10))
+    second = hdf5_scan.persistent_scan_options(HDF5ScanOptions(checkpoint_every_files=1000))
+
+    assert first == second
+    assert "checkpoint_every_files" not in first
 
 
 def test_ttot_sample_mask_matches_scalar_sample_check() -> None:
@@ -411,6 +480,105 @@ def test_scan_runner_reads_each_hdf5_file_once_for_multiple_tasks(tmp_path: Path
     assert result["b"]["task"].tolist() == ["b"]
     assert task_a.writes == 1
     assert task_b.writes == 1
+
+
+def test_scan_runner_checkpoints_after_configured_stale_file_count(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    paths = [str(tmp_path / f"snap.40_{idx}.h5part") for idx in range(3)]
+    for path in paths:
+        Path(path).write_text("fake")
+    tables = {
+        path: {
+            "scalars": pd.DataFrame({"TTOT": [float(idx)]}),
+            "binaries": pd.DataFrame({"TTOT": [float(idx)]}),
+        }
+        for idx, path in enumerate(paths)
+    }
+    task = FileBackedTask("checkpoint", tmp_path / "task_cache")
+    processor = FailingProcessor(paths, tables, {paths[2]})
+    runner = HDF5ScanRunner(config, processor)
+
+    with pytest.raises(RuntimeError, match="failed to read"):
+        runner.run(
+            "sim",
+            [task],
+            HDF5ScanOptions(wait_age_hour=0, checkpoint_every_files=2),
+        )
+
+    meta = json.loads(task.meta_path.read_text())
+    assert set(meta["processed_files"]) == set(paths[:2])
+    cached = pd.read_feather(task.cache_path)
+    assert cached["path"].tolist() == paths[:2]
+
+    resumed_task = FileBackedTask("checkpoint", tmp_path / "task_cache")
+    resumed_processor = FakeProcessor(paths, tables)
+    resumed = HDF5ScanRunner(config, resumed_processor).run(
+        "sim",
+        [resumed_task],
+        HDF5ScanOptions(wait_age_hour=0, checkpoint_every_files=2),
+    )
+
+    assert resumed_processor.read_paths == [paths[2]]
+    assert resumed["checkpoint"]["path"].tolist() == paths
+
+
+def test_scan_runner_flushes_partial_checkpoint_on_exception(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    paths = [str(tmp_path / f"snap.40_{idx}.h5part") for idx in range(2)]
+    for path in paths:
+        Path(path).write_text("fake")
+    tables = {
+        path: {
+            "scalars": pd.DataFrame({"TTOT": [float(idx)]}),
+            "binaries": pd.DataFrame({"TTOT": [float(idx)]}),
+        }
+        for idx, path in enumerate(paths)
+    }
+    task = FileBackedTask("partial", tmp_path / "task_cache")
+    runner = HDF5ScanRunner(config, FailingProcessor(paths, tables, {paths[1]}))
+
+    with pytest.raises(RuntimeError, match="failed to read"):
+        runner.run(
+            "sim",
+            [task],
+            HDF5ScanOptions(wait_age_hour=0, checkpoint_every_files=100),
+        )
+
+    meta = json.loads(task.meta_path.read_text())
+    assert set(meta["processed_files"]) == {paths[0]}
+    assert pd.read_feather(task.cache_path)["path"].tolist() == [paths[0]]
+
+
+def test_scan_runner_process_file_uses_initial_cache_view(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    paths = [str(tmp_path / f"snap.40_{idx}.h5part") for idx in range(2)]
+    for path in paths:
+        Path(path).write_text("fake")
+    tables = {
+        path: {
+            "scalars": pd.DataFrame({"TTOT": [float(idx)]}),
+            "binaries": pd.DataFrame({"TTOT": [float(idx)]}),
+        }
+        for idx, path in enumerate(paths)
+    }
+
+    class CacheViewTask(FakeTask):
+        def __init__(self):
+            super().__init__("cache_view")
+            self.seen_cache_lengths: list[int] = []
+
+        def process_file(self, hdf5_path, df_dict, meta, cache_df):
+            self.seen_cache_lengths.append(len(cache_df))
+            return super().process_file(hdf5_path, df_dict, meta, cache_df)
+
+    task = CacheViewTask()
+    HDF5ScanRunner(config, FakeProcessor(paths, tables)).run(
+        "sim",
+        [task],
+        HDF5ScanOptions(wait_age_hour=0, checkpoint_every_files=1),
+    )
+
+    assert task.seen_cache_lengths == [0, 0]
 
 
 def test_scan_runner_progress_advances_once_per_stale_hdf5_file(

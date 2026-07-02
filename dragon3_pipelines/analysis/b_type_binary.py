@@ -199,12 +199,12 @@ class BTypeBinaryTask(FeatherMetaCacheMixin):
     ) -> None:
         last_ttot = self._last_processed_ttot(cache_df, processed_files)
         self._active_cache_path = self._cache_path_for_last_ttot(last_ttot)
+        super().write_cache_and_meta(cache_df, processed_files, options)
         for old_path in self._existing_cache_paths():
             if old_path != self._active_cache_path:
                 old_meta = old_path.with_name(old_path.stem + ".meta.json")
                 old_path.unlink(missing_ok=True)
                 old_meta.unlink(missing_ok=True)
-        super().write_cache_and_meta(cache_df, processed_files, options)
 
     def build_meta(
         self,

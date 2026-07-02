@@ -37,6 +37,7 @@ class HDF5ScanOptions:
     exclude_bad_dirname: bool = True
     force: bool = False
     incremental_from_cache_tail: bool = True
+    checkpoint_every_files: int | None = 100
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,7 @@ def hdf5_scan_options_from_config(config: Any, *, force: bool = False) -> HDF5Sc
         use_hdf5_cache=table_cache.get("use_hdf5_cache", True),
         parallel=scan.get("parallel", False),
         incremental_from_cache_tail=scan.get("incremental_from_cache_tail", True),
+        checkpoint_every_files=scan.get("checkpoint_every_files", 100),
         force=force,
     )
 
@@ -149,6 +151,7 @@ class HDF5ScanRunner:
             )
 
         states: Dict[str, Dict[str, Any]] = {}
+        process_states: Dict[str, Dict[str, Any]] = {}
         stale_tasks_by_file: Dict[str, list[HDF5ScanTask]] = {}
         hdf5_paths = self.hdf5_file_processor.get_all_hdf5_paths(
             simu_name,
@@ -177,6 +180,7 @@ class HDF5ScanRunner:
                 "meta": meta,
                 "processed_files": dict(meta.get("processed_files", {})),
             }
+            process_states[task.name] = {"cache_df": cache_df, "meta": meta}
             for hdf5_path in self._paths_to_check_for_task(task, hdf5_paths, meta, options):
                 if options.force or not task.is_file_fresh(hdf5_path, meta, cache_df):
                     stale_tasks_by_file.setdefault(hdf5_path, []).append(task)
@@ -189,27 +193,46 @@ class HDF5ScanRunner:
 
         progress_description = f"{simu_name} HDF5 scan"
         if options.parallel and len(work_items) > 1:
-            results_by_file = self._run_parallel(simu_name, work_items, states, options)
+            file_results = self._run_parallel(simu_name, work_items, process_states, options)
         else:
-            file_results = (
-                self._run_file_tasks(simu_name, hdf5_path, file_tasks, states, options)
+            raw_file_results = (
+                self._run_file_tasks(simu_name, hdf5_path, file_tasks, process_states, options)
                 for hdf5_path, file_tasks in work_items
             )
-            results_by_file = _collect_with_progress(
-                file_results,
+            file_results = _iter_with_progress(
+                raw_file_results,
                 total=len(work_items),
                 description=progress_description,
             )
 
-        for file_result in results_by_file:
-            hdf5_path = file_result["hdf5_path"]
-            for task_name, task_result in file_result["task_results"].items():
-                task = next(task for task in tasks if task.name == task_name)
-                state = states[task_name]
-                state["cache_df"] = task.merge_file_result(
-                    state["cache_df"], hdf5_path, task_result
-                )
-                state["processed_files"][hdf5_path] = task_result["file_meta"]
+        task_by_name = {task.name: task for task in tasks}
+        dirty_task_names: set[str] = set()
+        files_since_checkpoint = 0
+        checkpoint_every_files = _normalized_checkpoint_every_files(options.checkpoint_every_files)
+
+        try:
+            for file_result in file_results:
+                hdf5_path = file_result["hdf5_path"]
+                for task_name, task_result in file_result["task_results"].items():
+                    task = task_by_name[task_name]
+                    state = states[task_name]
+                    state["cache_df"] = task.merge_file_result(
+                        state["cache_df"], hdf5_path, task_result
+                    )
+                    state["processed_files"][hdf5_path] = task_result["file_meta"]
+                    dirty_task_names.add(task_name)
+                files_since_checkpoint += 1
+                if (
+                    checkpoint_every_files is not None
+                    and files_since_checkpoint >= checkpoint_every_files
+                ):
+                    self._write_task_checkpoints(tasks, states, options)
+                    dirty_task_names.clear()
+                    files_since_checkpoint = 0
+        except (Exception, KeyboardInterrupt):
+            if dirty_task_names:
+                self._write_task_checkpoints(tasks, states, options)
+            raise
 
         output: Dict[str, pd.DataFrame] = {}
         for task in tasks:
@@ -218,6 +241,17 @@ class HDF5ScanRunner:
             task.write_cache_and_meta(cache_df, state["processed_files"], options)
             output[task.name] = cache_df
         return output
+
+    def _write_task_checkpoints(
+        self,
+        tasks: Sequence[HDF5ScanTask],
+        states: Mapping[str, Dict[str, Any]],
+        options: HDF5ScanOptions,
+    ) -> None:
+        for task in tasks:
+            state = states[task.name]
+            cache_df = task.finalize_cache(state["cache_df"])
+            task.write_cache_and_meta(cache_df, state["processed_files"], options)
 
     def _paths_to_check_for_task(
         self,
@@ -250,7 +284,7 @@ class HDF5ScanRunner:
         work_items: Sequence[tuple[str, Sequence[HDF5ScanTask]]],
         states: Mapping[str, Dict[str, Any]],
         options: HDF5ScanOptions,
-    ) -> list[Dict[str, Any]]:
+    ) -> Iterable[Dict[str, Any]]:
         processes = getattr(self.config, "processes_count", None)
         maxtasksperchild = getattr(self.config, "tasks_per_child", None)
         ctx = multiprocessing.get_context("forkserver")
@@ -259,7 +293,7 @@ class HDF5ScanRunner:
             for hdf5_path, file_tasks in work_items
         ]
         with ctx.Pool(processes=processes, maxtasksperchild=maxtasksperchild) as pool:
-            return _collect_with_progress(
+            yield from _iter_with_progress(
                 pool.imap(_run_file_tasks_worker, args),
                 total=len(work_items),
                 description=f"{simu_name} HDF5 scan",
@@ -326,22 +360,21 @@ def _run_file_tasks_worker(
     return runner._run_file_tasks(simu_name, hdf5_path, file_tasks, states, options)
 
 
-def _collect_with_progress(
+def _iter_with_progress(
     iterator: Iterable[Dict[str, Any]],
     *,
     total: int,
     description: str,
-) -> list[Dict[str, Any]]:
+) -> Iterable[Dict[str, Any]]:
     if total <= 0:
-        return list(iterator)
+        yield from iterator
+        return
 
-    results = []
     with Progress() as progress:
         task_id = progress.add_task(description, total=total)
         for result in iterator:
-            results.append(result)
+            yield result
             progress.advance(task_id)
-    return results
 
 
 def _merge_columns_by_table(
@@ -494,7 +527,16 @@ def persistent_scan_options(options: HDF5ScanOptions) -> Dict[str, Any]:
     """Options persisted in metadata for cache compatibility checks."""
     values = asdict(options)
     values.pop("force", None)
+    values.pop("checkpoint_every_files", None)
     return values
+
+
+def _normalized_checkpoint_every_files(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if value <= 0:
+        return None
+    return int(value)
 
 
 def file_times_from_scalars(df_dict: Mapping[str, pd.DataFrame]) -> list[float]:
