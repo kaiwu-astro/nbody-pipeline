@@ -44,7 +44,7 @@ class TestConfigManager:
         assert config.hdf5["file_selection"]["sample_every_nb_time"] == 1.0
         assert config.hdf5["file_selection"]["exclude_bad_dirname"] is True
         assert config.hdf5["table_cache"]["use_hdf5_cache"] is True
-        assert config.hdf5["scan"]["parallel"] is False
+        assert config.hdf5["scan"]["parallel"] is True
         assert config.hdf5["scan"]["incremental_from_cache_tail"] is True
 
         # Check stellar types are loaded
@@ -120,7 +120,7 @@ class TestConfigManager:
             "galactic_orbit": {"enabled": False, "time_color_max_myr": 750.0},
             "hdf5": {
                 "file_selection": {"sample_every_nb_time": 2.0, "wait_age_hour": 0},
-                "scan": {"parallel": True},
+                "scan": {"parallel": False},
             },
         }
         user_config_path = temp_dir / "user_galactic_orbit_config.yaml"
@@ -134,7 +134,7 @@ class TestConfigManager:
         assert config.galactic_orbit["cache_filename"] == "galactic_orbit.feather"
         assert config.hdf5["file_selection"]["sample_every_nb_time"] == 2.0
         assert config.hdf5["file_selection"]["wait_age_hour"] == 0
-        assert config.hdf5["scan"]["parallel"] is True
+        assert config.hdf5["scan"]["parallel"] is False
         assert config.hdf5["table_cache"]["use_hdf5_cache"] is True
 
     def test_removed_pre_1_config_keys_raise(self, temp_dir):
