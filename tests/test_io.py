@@ -8,6 +8,8 @@ from dragon3_pipelines.io import (
     get_scale_dict_from_hdf5_df,
     read_bwdat,
     read_bdat,
+    read_coll_13,
+    read_coal_24,
     make_l7header,
     l7df_to_physical_units,
     transform_l7df_to_sns_friendly,
@@ -58,6 +60,45 @@ class TestTextParsers:
         df = read_bdat(str(bdat_file))
         assert len(df) == 2
         assert list(df.columns) == ["A", "B", "C"]
+
+    def test_read_coll_13_mixed_headered_and_headerless_chunks(self, temp_dir):
+        """Test coll.13 parser with concatenated headered and headerless chunks"""
+        coll_file = temp_dir / "coll.13"
+        coll_file.write_text("""
+      MODEL:    RBAR = 2.0 <M>[M*] = 0.5
+
+                  TIME[NB]    NAME(I1)    NAME(I2)      K*(I1)      K*(I2)    K*(INEW)                 M(I1)[M*]                 M(I2)[M*]               M(INEW)[M*]                    DM[M*]                RS(I1)[R*]                RS(I2)[R*]                    RI[RC]                   R12[R*]                       ECC                   P[days]
+
+   2.1484375000000000E-002          70          69           0           0           0   8.0011524700507985E-002   8.0011152204026201E-002  0.16002267690453420        0.0000000000000000       0.15339321320082239       0.15339345124407011        1.0702293519063384       0.22556537802705393       0.81202286764368137       0.38044884885241465
+   2913.6932184696198            95325      119152          14           1          14   40.500000000000000        2.7098000488923106        41.854900024446152        1.3549000244461553        1.7171999999999999E-004   1.5680612599913319       0.49323879099146639        1.8117363135256588        1.0001790545607305       -17927.064589961425
+""")
+
+        df = read_coll_13(str(coll_file))
+
+        assert len(df) == 2
+        assert df["TIME[NB]"].tolist() == pytest.approx([0.021484375, 2913.6932184696198])
+        assert df["NAME(I1)"].tolist() == [70, 95325]
+        assert df["K*(I1)"].tolist() == [0, 14]
+        assert df["M(I1)[M*]"].tolist() == pytest.approx([0.08001152470050799, 40.5])
+
+    def test_read_coal_24_old_and_compact_formats(self, temp_dir):
+        """Test coal.24 parser with old headered rows and compact BINARY/ROCHE rows"""
+        coal_file = temp_dir / "coal.24"
+        coal_file.write_text("""
+          TIME[NB]           NAME(I1)    NAME(I2)     K*(I1)      K*(I2)       K*1       IQCOLL             M(I1)[M*]                 M(I2)[M*]                M(INEW)[M*]                DM[M*]                    RS(I1)[R*]                RS(I2)[R*]                 RI/RC                     R12[R*]                   ECC                       P[days]                   RCOLL[R*]                  EB[NB]                    DP[NB]                    VINF[km/s]
+   2.1484375000000000E-002        2637        2638           0           0           0           3  0.11702739289326970       0.10764211228603181       0.11702740805664708       0.10764209712265442       0.13525384536076443        0.0000000000000000        1.3900859407360744       0.35278321333321200       -1.9974978751822192E-003   5.1030022138430192E-002  0.35278321343986480       -5.1039197813355911E-006  -6.7762635780344027E-021   0.0000000000000000
+ BINARY   0 2.8827246094E+03     93127     93128   5   0   5  4.27669E+00  0.00000E+00  3.72164E-06  1.00000E-03  3.72537E-06 -8.38777E-07  5.42101E-20  3.81237E+02  3.71806E+00  5.68591E-01  4.27669E+00  9.95515E-03  2.55601E+02  0.00000E+00  3.59179E+02  0.00000E+00  3.33137E+00  2.69375E-01
+""")
+
+        df = read_coal_24(str(coal_file))
+
+        assert len(df) == 2
+        assert df["TIME[NB]"].tolist() == pytest.approx([0.021484375, 2882.7246094])
+        assert df["NAME(I1)"].tolist() == [2637, 93127]
+        assert df["K*(I1)"].tolist() == [0, 5]
+        assert df["M(I1)[M*]"].tolist() == pytest.approx([0.1170273928932697, 3.71806])
+        assert pd.isna(df["Coalescence_trigger"].iloc[0])
+        assert df["Coalescence_trigger"].iloc[1] == "BINARY"
 
     def test_make_l7header(self):
         """Test lagr.7 header generation"""

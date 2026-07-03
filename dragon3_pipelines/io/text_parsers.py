@@ -542,14 +542,130 @@ def read_bdat(filename: str) -> pd.DataFrame:
     return pd.read_csv(filename, sep=r"\s+")
 
 
+COLL_13_COLUMNS = [
+    "TIME[NB]",
+    "NAME(I1)",
+    "NAME(I2)",
+    "K*(I1)",
+    "K*(I2)",
+    "K*(INEW)",
+    "M(I1)[M*]",
+    "M(I2)[M*]",
+    "M(INEW)[M*]",
+    "DM[M*]",
+    "RS(I1)[R*]",
+    "RS(I2)[R*]",
+    "RI[RC]",
+    "R12[R*]",
+    "ECC",
+    "P[days]",
+]
+
+COAL_24_COLUMNS = [
+    "TIME[NB]",
+    "NAME(I1)",
+    "NAME(I2)",
+    "K*(I1)",
+    "K*(I2)",
+    "K*(INEW)",
+    "IQCOLL",
+    "M(I1)[M*]",
+    "M(I2)[M*]",
+    "M(INEW)[M*]",
+    "DM[M*]",
+    "RS(I1)[R*]",
+    "RS(I2)[R*]",
+    "RI[RC]",
+    "R12[R*]",
+    "ECC",
+    "P[days]",
+    "RCOLL[R*]",
+    "EB[NB]",
+    "DP[NB]",
+    "VINF[km/s]",
+]
+
+COAL_24_COMPACT_COLUMNS = [
+    "Coalescence_trigger",
+    "IQCOLL",
+    "TIME[NB]",
+    "NAME(I1)",
+    "NAME(I2)",
+    "K*(I1)",
+    "K*(I2)",
+    "K*(INEW)",
+    "COAL24_FIELD_08",
+    "COAL24_FIELD_09",
+    "COAL24_FIELD_10",
+    "COAL24_FIELD_11",
+    "COAL24_FIELD_12",
+    "COAL24_FIELD_13",
+    "COAL24_FIELD_14",
+    "COAL24_FIELD_15",
+    "M(I1)[M*]",
+    "M(I2)[M*]",
+    "M(INEW)[M*]",
+    "DM[M*]",
+    "COAL24_FIELD_20",
+    "COAL24_FIELD_21",
+    "COAL24_FIELD_22",
+    "COAL24_FIELD_23",
+    "ECC",
+    "P[days]",
+]
+
+
+def _numeric_output_df(records: list[dict], columns: list[str]) -> pd.DataFrame:
+    """Build a DataFrame and convert numeric-looking columns."""
+    df = pd.DataFrame.from_records(records, columns=columns)
+    for column in df.columns:
+        if column == "Coalescence_trigger":
+            continue
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    return df
+
+
+def _split_data_lines(path: str) -> list[list[str]]:
+    """Return whitespace tokens for non-empty data lines, leaving headers to callers."""
+    token_lines = []
+    with open(path, "r") as f:
+        for line in f:
+            tokens = line.split()
+            if tokens:
+                token_lines.append(tokens)
+    return token_lines
+
+
 def read_coll_13(path: str) -> pd.DataFrame:
-    """Read coll.13 collision file"""
-    return pd.read_csv(path, sep=r"\s+", skiprows=(0, 1, 2, 3, 5))
+    """Read coll.13 collision file, accepting both headered and headerless chunks."""
+    records = []
+    for tokens in _split_data_lines(path):
+        if len(tokens) != len(COLL_13_COLUMNS) or not can_convert_to_float(tokens[0]):
+            continue
+        records.append(dict(zip(COLL_13_COLUMNS, tokens)))
+    return _numeric_output_df(records, COLL_13_COLUMNS)
 
 
 def read_coal_24(path: str) -> pd.DataFrame:
-    """Read coal.24 coalescence file"""
-    return pd.read_csv(path, sep=r"\s+", skiprows=4)
+    """Read coal.24 coalescence file, accepting old and compact output formats."""
+    records = []
+    columns = COAL_24_COLUMNS + [
+        column for column in COAL_24_COMPACT_COLUMNS if column not in COAL_24_COLUMNS
+    ]
+
+    for tokens in _split_data_lines(path):
+        if len(tokens) == len(COAL_24_COLUMNS) and can_convert_to_float(tokens[0]):
+            records.append(dict(zip(COAL_24_COLUMNS, tokens)))
+            continue
+
+        if (
+            len(tokens) == len(COAL_24_COMPACT_COLUMNS)
+            and tokens[0] in {"BINARY", "ROCHE"}
+            and can_convert_to_float(tokens[2])
+        ):
+            records.append(dict(zip(COAL_24_COMPACT_COLUMNS, tokens)))
+
+    return _numeric_output_df(records, columns)
 
 
 def make_l7header() -> list:
