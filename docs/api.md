@@ -128,6 +128,10 @@ Count compact binary categories across snapshots. `summarize_simulation()` retur
 
 Build cluster galactic-orbit points from scalar HDF5 snapshots. `load_plot_data()` returns de-duplicated rows containing `TTOT`, `Time[Myr]`, `RG(1..3)`, `VG(1..3)`, and source tracking columns. Results are cached under `galactic_orbit`.
 
+### `dragon3_pipelines.analysis.GalacticEnergyAngularMomentumProcessor`
+
+Compute per-star galactocentric kinetic energy, potential energy, total energy, and `L_z` for one HDF5 snapshot. `compute_snapshot(single_df_at_t, scalar_row_at_t)` returns a copy of the single-star DataFrame with `E_kin_gal[Msun*(km/s)^2]`, `E_pot_gal[Msun*(km/s)^2]`, `E_gal[Msun*(km/s)^2]`, and `L_z_gal[Msun*kpc*km/s]`. The calculation uses `galpy` `MWPotential2014`; scalar `RG/VG` are interpreted as pc/km/s and added directly to star offsets.
+
 ### `dragon3_pipelines.analysis.tau_gw`
 
 Calculate gravitational wave merger timescales.

@@ -28,6 +28,7 @@ dependencies = [
     "astropy>=7.0.1",
     "colour-science>=0.4.6",
     "h5py>=3.13.0",
+    "galpy>=1.11.1",
     "matplotlib>=3.10.3",
     "numpy>=2.2.6",
     "pandas>=2.3.0",

@@ -108,6 +108,10 @@ hdf5:
 galactic_orbit:
   enabled: true
   time_color_max_myr: 500.0
+
+galactic_energy_angular_momentum:
+  enabled: true
+  percentile_limits: [0.1, 99.9]
 ```
 
 Load it in your code:
@@ -218,6 +222,21 @@ viz.create_interactive_3d_html(orbit_df, "my_sim")
 
 This scan-backed analysis caches scalar snapshot rows under `galactic_orbit` and plots the cluster position columns `RG(1..3)` colored by `Time[Myr]`.
 
+### Plot Snapshot Galactic Energy vs Angular Momentum
+
+```python
+from dragon3_pipelines.analysis import GalacticEnergyAngularMomentumProcessor
+from dragon3_pipelines.visualization import SingleStarVisualizer
+
+plot_df = GalacticEnergyAngularMomentumProcessor(config).compute_snapshot(
+    single_df_at_t,
+    scalar_row_at_t,
+)
+SingleStarVisualizer(config).create_galactic_energy_angular_momentum_plot_jpg(plot_df, "my_sim")
+```
+
+The default HDF5 plotting flow creates `jpg/{prefix}output_ttot_{ttot}_galactic_E_vs_Lz.jpg` when `galactic_energy_angular_momentum.enabled` is true. The calculation uses `galpy` `MWPotential2014` with scalar `RG/VG` interpreted as pc/km/s and plots finite stellar points with axis limits from `percentile_limits`.
+
 ### Create Visualizations
 
 ```python
@@ -249,6 +268,7 @@ python -m dragon3_pipelines purge --list-targets
 
 # Preview matching files before deleting
 python -m dragon3_pipelines purge single.create_position_plot_jpg --simu sim_a --dry-run
+python -m dragon3_pipelines purge single.create_galactic_energy_angular_momentum_plot_jpg --simu sim_a --dry-run
 
 # Delete matching files without an interactive confirmation
 python -m dragon3_pipelines purge single.create_position_plot_jpg --simu sim_a --yes

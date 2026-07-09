@@ -29,6 +29,7 @@ from dragon3_pipelines.visualization import (
 )
 from dragon3_pipelines.analysis import (
     CurrentMassLagrangianProcessor,
+    GalacticEnergyAngularMomentumProcessor,
     GalacticOrbitProcessor,
     ParticleTracker,
 )
@@ -55,6 +56,9 @@ class SimulationPlotter:
         self.particle_tracker = ParticleTracker(config_manager)
         self.current_lagrangian_processor = CurrentMassLagrangianProcessor(config_manager)
         self.galactic_orbit_processor = GalacticOrbitProcessor(config_manager)
+        self.galactic_energy_angular_momentum_processor = GalacticEnergyAngularMomentumProcessor(
+            config_manager
+        )
 
     def plot_hdf5_file(self, hdf5_file_path: str, simu_name: str) -> None:
         """处理单个HDF5文件（包含多个snapshot）
@@ -85,7 +89,7 @@ class SimulationPlotter:
                 continue
             if not ttot_matches_sample(float(ttot), sample_every_nb_time):
                 continue
-            logger.debug(f"{ttot=}", end=" | ")
+            logger.debug(f"{ttot=}")
 
             # 获取该时间点的数据
             single_df_at_t, binary_df_at_t, is_valid = self.hdf5_file_processor.get_snapshot_at_t(
@@ -123,6 +127,23 @@ class SimulationPlotter:
             self.hdf5_visualizer.single.create_CMD_plot_density(single_df_at_t, simu_name)
             # 彩色CMD图
             self.hdf5_visualizer.single.create_color_CMD_jpg(single_df_at_t, simu_name)
+            if self.config.galactic_energy_angular_momentum.get("enabled", True):
+                galactic_e_lz_path = (
+                    self.hdf5_visualizer.single.galactic_energy_angular_momentum_plot_jpg_path(
+                        single_df_at_t, simu_name
+                    )
+                )
+                if not (self.config.skip_existing_plot and os.path.exists(galactic_e_lz_path)):
+                    galactic_e_lz_df = (
+                        self.galactic_energy_angular_momentum_processor.compute_snapshot(
+                            single_df_at_t, scalar_row_at_t
+                        )
+                    )
+                    self.hdf5_visualizer.single.create_galactic_energy_angular_momentum_plot_jpg(
+                        galactic_e_lz_df, simu_name
+                    )
+                else:
+                    logger.debug(f"Skip existing plot: {galactic_e_lz_path}")
             # 速度-位置 # 不知为何非常非常慢，先不弄
             # self.hdf5_visualizer.single.create_vx_x_plot_density(single_df_at_t, simu_name)
 

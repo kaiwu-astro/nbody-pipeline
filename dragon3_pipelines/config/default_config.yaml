@@ -72,6 +72,11 @@ galactic_orbit:
   cache_filename: "galactic_orbit.feather"
   time_color_max_myr: 500.0
 
+# Snapshot-level stellar energy and angular momentum in MWPotential2014
+galactic_energy_angular_momentum:
+  enabled: true
+  percentile_limits: [0.1, 99.9]
+
 # Binary rows containing a requested stellar type, built from HDF5 snapshots
 binary_stellar_type_extraction:
   cache_filename_template: "binaries_with_{target}_until_{last_ttot:.6f}.feather"

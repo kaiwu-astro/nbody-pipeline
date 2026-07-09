@@ -25,6 +25,7 @@ class TestConfigManager:
         assert hasattr(config, "processes_count")
         assert hasattr(config, "kw_to_stellar_type")
         assert hasattr(config, "galactic_orbit")
+        assert hasattr(config, "galactic_energy_angular_momentum")
         assert hasattr(config, "hdf5")
 
         # Check basic types
@@ -39,6 +40,9 @@ class TestConfigManager:
 
         # Check nested config sections are loaded
         assert isinstance(config.galactic_orbit, dict)
+        assert isinstance(config.galactic_energy_angular_momentum, dict)
+        assert config.galactic_energy_angular_momentum["enabled"] is True
+        assert config.galactic_energy_angular_momentum["percentile_limits"] == [0.1, 99.9]
         assert isinstance(config.hdf5, dict)
         assert "file_selection" in config.hdf5
         assert "table_cache" in config.hdf5
@@ -116,6 +120,10 @@ class TestConfigManager:
         """Test user config can override feature and global HDF5 settings."""
         user_config = {
             "galactic_orbit": {"enabled": False, "time_color_max_myr": 750.0},
+            "galactic_energy_angular_momentum": {
+                "enabled": False,
+                "percentile_limits": [1.0, 99.0],
+            },
             "hdf5": {
                 "file_selection": {"sample_every_nb_time": 2.0, "wait_age_hour": 0},
                 "scan": {"parallel": False, "checkpoint_every_files": 25},
@@ -129,6 +137,8 @@ class TestConfigManager:
 
         assert config.galactic_orbit["enabled"] is False
         assert config.galactic_orbit["time_color_max_myr"] == 750.0
+        assert config.galactic_energy_angular_momentum["enabled"] is False
+        assert config.galactic_energy_angular_momentum["percentile_limits"] == [1.0, 99.0]
         assert config.hdf5["file_selection"]["sample_every_nb_time"] == 2.0
         assert config.hdf5["file_selection"]["wait_age_hour"] == 0
         assert config.hdf5["scan"]["parallel"] is False

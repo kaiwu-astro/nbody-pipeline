@@ -11,9 +11,16 @@ from dragon3_pipelines.__main__ import SimulationPlotter
 from dragon3_pipelines.analysis import (
     CompactBinaryCounter,
     CurrentMassLagrangianProcessor,
+    GalacticEnergyAngularMomentumProcessor,
     GalacticOrbitProcessor,
     ParticleTracker,
     tau_gw,
+)
+from dragon3_pipelines.analysis.galactic_energy_angular_momentum import (
+    E_GAL_COL,
+    E_KIN_GAL_COL,
+    E_POT_GAL_COL,
+    L_Z_GAL_COL,
 )
 
 
@@ -726,6 +733,126 @@ class TestCurrentMassLagrangianProcessor:
         assert result.loc[result["Metric"] == "sigma", "Value"].iloc[0] == pytest.approx(2.0)
 
 
+class TestGalacticEnergyAngularMomentumProcessor:
+    """Tests for snapshot-level galactic energy and angular momentum."""
+
+    def test_compute_snapshot_uses_mass_weighted_energy_and_lz(self):
+        processor = GalacticEnergyAngularMomentumProcessor()
+        singles = pd.DataFrame(
+            {
+                "M": [2.0, 3.0],
+                "X [pc]": [1000.0, 0.0],
+                "Y [pc]": [0.0, 2000.0],
+                "Z [pc]": [0.0, 0.0],
+                "V1": [10.0, 0.0],
+                "V2": [0.0, 20.0],
+                "V3": [0.0, 0.0],
+            }
+        )
+        scalar = pd.Series(
+            {
+                "RG(1)": 0.0,
+                "RG(2)": 0.0,
+                "RG(3)": 0.0,
+                "VG(1)": 1.0,
+                "VG(2)": 2.0,
+                "VG(3)": 3.0,
+            }
+        )
+
+        with patch(
+            "dragon3_pipelines.analysis.galactic_energy_angular_momentum._evaluate_mw_potential",
+            return_value=np.array([-100.0, -200.0]),
+        ):
+            result = processor.compute_snapshot(singles, scalar)
+
+        np.testing.assert_allclose(result[E_KIN_GAL_COL], [0.5 * 2.0 * 134.0, 0.5 * 3.0 * 494.0])
+        np.testing.assert_allclose(result[E_POT_GAL_COL], [-200.0, -600.0])
+        np.testing.assert_allclose(result[E_GAL_COL], [-66.0, 141.0])
+        np.testing.assert_allclose(result[L_Z_GAL_COL], [4.0, -6.0])
+
+    def test_raw_rg_vg_offsets_and_pc_to_kpc_conversion(self):
+        processor = GalacticEnergyAngularMomentumProcessor()
+        singles = pd.DataFrame(
+            {
+                "M": [5.0],
+                "X [pc]": [200.0],
+                "Y [pc]": [300.0],
+                "Z [pc]": [400.0],
+                "V1": [7.0],
+                "V2": [11.0],
+                "V3": [13.0],
+            }
+        )
+        scalar = pd.Series(
+            {
+                "RG(1)": 800.0,
+                "RG(2)": 1700.0,
+                "RG(3)": 2600.0,
+                "VG(1)": 3.0,
+                "VG(2)": 5.0,
+                "VG(3)": 7.0,
+            }
+        )
+        observed = {}
+
+        def fake_potential(radius_kpc, z_kpc, phi_rad):
+            observed["radius_kpc"] = radius_kpc
+            observed["z_kpc"] = z_kpc
+            observed["phi_rad"] = phi_rad
+            return np.array([0.0])
+
+        with patch(
+            "dragon3_pipelines.analysis.galactic_energy_angular_momentum._evaluate_mw_potential",
+            side_effect=fake_potential,
+        ):
+            result = processor.compute_snapshot(singles, scalar)
+
+        np.testing.assert_allclose(observed["radius_kpc"], [np.sqrt(1.0**2 + 2.0**2)])
+        np.testing.assert_allclose(observed["z_kpc"], [3.0])
+        np.testing.assert_allclose(observed["phi_rad"], [np.arctan2(2000.0, 1000.0)])
+        assert result[L_Z_GAL_COL].iloc[0] == pytest.approx(5.0 * (1.0 * 16.0 - 2.0 * 10.0))
+
+    def test_mwpotential_info_log_only_once(self, caplog):
+        import dragon3_pipelines.analysis.galactic_energy_angular_momentum as module
+
+        module._HAS_LOGGED_MW_POTENTIAL = False
+        processor = GalacticEnergyAngularMomentumProcessor()
+        singles = pd.DataFrame(
+            {
+                "M": [1.0],
+                "X [pc]": [0.0],
+                "Y [pc]": [0.0],
+                "Z [pc]": [0.0],
+                "V1": [0.0],
+                "V2": [0.0],
+                "V3": [0.0],
+            }
+        )
+        scalar = pd.Series(
+            {
+                "RG(1)": 0.0,
+                "RG(2)": 0.0,
+                "RG(3)": 0.0,
+                "VG(1)": 0.0,
+                "VG(2)": 0.0,
+                "VG(3)": 0.0,
+            }
+        )
+
+        with (
+            patch(
+                "dragon3_pipelines.analysis.galactic_energy_angular_momentum._evaluate_mw_potential",
+                return_value=np.array([0.0]),
+            ),
+            caplog.at_level("INFO"),
+        ):
+            processor.compute_snapshot(singles, scalar)
+            processor.compute_snapshot(singles, scalar)
+
+        assert caplog.text.count("MWPotential2014") == 1
+
+
 class TestCompactBinaryCounter:
     """Tests for cross-snapshot compact binary counting."""
 
@@ -1053,3 +1180,80 @@ class TestSimulationPlotterGalacticOrbit:
 
         plot_lagr.assert_called_once_with("test_simu")
         plot_orbit.assert_called_once_with("test_simu")
+
+
+class TestSimulationPlotterGalacticEnergyAngularMomentum:
+    """Integration tests for snapshot galactic E-vs-Lz plotter wiring."""
+
+    def _plotter(self, enabled=True, skip_existing=False, path_exists=False):
+        config = Mock()
+        config.skip_until_of = {"test_simu": 0.0}
+        config.hdf5 = {"file_selection": {"sample_every_nb_time": 1.0}}
+        config.skip_existing_plot = skip_existing
+        config.galactic_energy_angular_momentum = {"enabled": enabled}
+
+        singles = pd.DataFrame({"TTOT": [1.0], "value": [1]})
+        scalars = pd.DataFrame(
+            {
+                "TTOT": [1.0],
+                "RG(1)": [0.0],
+                "RG(2)": [0.0],
+                "RG(3)": [0.0],
+                "VG(1)": [0.0],
+                "VG(2)": [0.0],
+                "VG(3)": [0.0],
+            }
+        ).set_index("TTOT", drop=False)
+        df_dict = {"singles": singles, "binaries": pd.DataFrame(), "scalars": scalars}
+
+        plotter = SimulationPlotter.__new__(SimulationPlotter)
+        plotter.config = config
+        plotter.hdf5_file_processor = Mock()
+        plotter.hdf5_file_processor.get_hdf5_file_time_from_filename.return_value = 1.0
+        plotter.hdf5_file_processor.read_file.return_value = df_dict
+        plotter.hdf5_file_processor.get_snapshot_at_t.return_value = (
+            singles,
+            pd.DataFrame(),
+            True,
+        )
+        plotter.hdf5_visualizer = Mock()
+        single_visualizer = plotter.hdf5_visualizer.single
+        single_visualizer.galactic_energy_angular_momentum_plot_jpg_path.return_value = (
+            "/tmp/existing.jpg"
+        )
+        plotter.galactic_energy_angular_momentum_processor = Mock()
+        galactic_df = pd.DataFrame({"TTOT": [1.0], E_GAL_COL: [1.0], L_Z_GAL_COL: [2.0]})
+        plotter.galactic_energy_angular_momentum_processor.compute_snapshot.return_value = (
+            galactic_df
+        )
+        return plotter, singles, scalars.iloc[0], path_exists
+
+    def test_plot_hdf5_file_calls_processor_and_visualizer_when_enabled(self):
+        plotter, singles, scalar, path_exists = self._plotter(enabled=True)
+
+        with patch("dragon3_pipelines.__main__.os.path.exists", return_value=path_exists):
+            plotter.plot_hdf5_file("/tmp/snap.40_1.0.h5part", "test_simu")
+
+        plotter.galactic_energy_angular_momentum_processor.compute_snapshot.assert_called_once()
+        call_args = plotter.galactic_energy_angular_momentum_processor.compute_snapshot.call_args
+        pd.testing.assert_frame_equal(call_args.args[0], singles)
+        pd.testing.assert_series_equal(call_args.args[1], scalar)
+        plotter.hdf5_visualizer.single.create_galactic_energy_angular_momentum_plot_jpg.assert_called_once()
+
+    def test_plot_hdf5_file_skips_when_disabled(self):
+        plotter, _, _, path_exists = self._plotter(enabled=False)
+
+        with patch("dragon3_pipelines.__main__.os.path.exists", return_value=path_exists):
+            plotter.plot_hdf5_file("/tmp/snap.40_1.0.h5part", "test_simu")
+
+        plotter.galactic_energy_angular_momentum_processor.compute_snapshot.assert_not_called()
+        plotter.hdf5_visualizer.single.create_galactic_energy_angular_momentum_plot_jpg.assert_not_called()
+
+    def test_plot_hdf5_file_skips_compute_when_existing_jpg_is_reused(self):
+        plotter, _, _, path_exists = self._plotter(skip_existing=True, path_exists=True)
+
+        with patch("dragon3_pipelines.__main__.os.path.exists", return_value=path_exists):
+            plotter.plot_hdf5_file("/tmp/snap.40_1.0.h5part", "test_simu")
+
+        plotter.galactic_energy_angular_momentum_processor.compute_snapshot.assert_not_called()
+        plotter.hdf5_visualizer.single.create_galactic_energy_angular_momentum_plot_jpg.assert_not_called()

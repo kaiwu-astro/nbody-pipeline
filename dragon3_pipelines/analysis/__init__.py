@@ -3,6 +3,9 @@
 from dragon3_pipelines.analysis.particle_tracker import ParticleTracker
 from dragon3_pipelines.analysis.current_lagrangian import CurrentMassLagrangianProcessor
 from dragon3_pipelines.analysis.galactic_orbit import GalacticOrbitProcessor
+from dragon3_pipelines.analysis.galactic_energy_angular_momentum import (
+    GalacticEnergyAngularMomentumProcessor,
+)
 from dragon3_pipelines.analysis.compact_binary_counter import CompactBinaryCounter
 from dragon3_pipelines.analysis.b_type_binary import BTypeBinaryExtractor
 from dragon3_pipelines.analysis.binary_stellar_type import BinaryStellarTypeExtractor
@@ -21,6 +24,7 @@ __all__ = [
     "ParticleTracker",
     "CurrentMassLagrangianProcessor",
     "GalacticOrbitProcessor",
+    "GalacticEnergyAngularMomentumProcessor",
     "CompactBinaryCounter",
     "BTypeBinaryExtractor",
     "BinaryStellarTypeExtractor",

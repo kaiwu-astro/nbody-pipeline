@@ -37,6 +37,11 @@ SINGLE_TARGETS: tuple[PlotTarget, ...] = (
     PlotTarget("single", "create_mass_distance_plot_density", "mass_vs_distance_loglog"),
     PlotTarget("single", "create_vx_x_plot_density", "allstar_vx_vs_x"),
     PlotTarget("single", "create_CMD_plot_density", "L_vs_Teff_loglog"),
+    PlotTarget(
+        "single",
+        "create_galactic_energy_angular_momentum_plot_jpg",
+        "galactic_E_vs_Lz",
+    ),
     PlotTarget("single", "create_position_plot_jpg", "x1_vs_x2", True),
     PlotTarget("single", "create_position_plot_wide_pc_jpg", "x1_vs_x2_wide_pc"),
     PlotTarget(

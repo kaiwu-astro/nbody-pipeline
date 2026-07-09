@@ -44,6 +44,8 @@ def mock_config():
         "x_R [pc]": "x_R [pc]",
         "x_T [pc]": "x_T [pc]",
         "x_L [pc]": "x_L [pc]",
+        "E_gal[Msun*(km/s)^2]": "E_gal",
+        "L_z_gal[Msun*kpc*km/s]": "L_z_gal",
         "M": "Mass [Msolar]",
     }
     config.fixed_width_font_context = {"rc": {"font.family": "monospace"}}
@@ -60,6 +62,7 @@ def mock_config():
     config.figname_prefix = {"test_sim": "test_"}
     config.skip_existing_plot = False
     config.close_figure_in_ipython = False
+    config.galactic_energy_angular_momentum = {"enabled": True, "percentile_limits": [25, 75]}
     config.selected_lagr_percent = [10, 50, 90]
     config.compact_object_KW = [10, 11, 12, 13, 14]
     config.kw_to_stellar_type_verbose = {i: f"{i}:Type{i}" for i in range(16)}
@@ -408,6 +411,78 @@ class TestSingleStarVisualizer:
             # Some plotting functions might fail in headless environment
             # Just ensure the method can be called
             pass
+
+    def test_galactic_energy_angular_momentum_plot_path(self, mock_config, sample_dataframe):
+        vis = SingleStarVisualizer(mock_config)
+
+        path = vis.galactic_energy_angular_momentum_plot_jpg_path(sample_dataframe, "test_sim")
+
+        assert path == "/tmp/plots/jpg/test_output_ttot_1.0_galactic_E_vs_Lz.jpg"
+
+    def test_galactic_energy_angular_momentum_plot_filters_finite_and_uses_percentiles(
+        self, mock_config, tmp_path, monkeypatch
+    ):
+        mock_config.plot_dir = str(tmp_path)
+        (tmp_path / "jpg").mkdir()
+        vis = SingleStarVisualizer(mock_config)
+        df = pd.DataFrame(
+            {
+                "TTOT": [1.0] * 5,
+                "Time[Myr]": [10.0] * 5,
+                "TTOT/TCR0": [5.0] * 5,
+                "TTOT/TRH0": [2.0] * 5,
+                "L_z_gal[Msun*kpc*km/s]": [0.0, 10.0, 20.0, np.inf, 40.0],
+                "E_gal[Msun*(km/s)^2]": [-100.0, -50.0, 0.0, 10.0, np.nan],
+            }
+        )
+        saved_paths = []
+        scatter_calls = []
+
+        def fake_scatterplot(*args, **kwargs):
+            scatter_calls.append(kwargs)
+            return kwargs["ax"]
+
+        def fake_savefig(self, path, *args, **kwargs):
+            saved_paths.append(Path(path))
+
+        monkeypatch.setattr(
+            "dragon3_pipelines.visualization.single_star.sns.scatterplot", fake_scatterplot
+        )
+        monkeypatch.setattr(plt.Figure, "savefig", fake_savefig)
+
+        vis.create_galactic_energy_angular_momentum_plot_jpg(df, "test_sim")
+
+        assert saved_paths == [tmp_path / "jpg" / "test_output_ttot_1.0_galactic_E_vs_Lz.jpg"]
+        assert scatter_calls[0]["color"] == "white"
+        assert scatter_calls[0]["alpha"] == 0.25
+        assert len(scatter_calls[0]["data"]) == 3
+        ax = scatter_calls[0]["ax"]
+        assert ax.get_xlim() == pytest.approx((5.0, 15.0))
+        assert ax.get_ylim() == pytest.approx((-75.0, -25.0))
+        plt.close(ax.figure)
+
+    def test_galactic_energy_angular_momentum_plot_skips_nonfinite_points(
+        self, mock_config, tmp_path, monkeypatch
+    ):
+        mock_config.plot_dir = str(tmp_path)
+        (tmp_path / "jpg").mkdir()
+        vis = SingleStarVisualizer(mock_config)
+        df = pd.DataFrame(
+            {
+                "TTOT": [1.0],
+                "Time[Myr]": [10.0],
+                "TTOT/TCR0": [5.0],
+                "TTOT/TRH0": [2.0],
+                "L_z_gal[Msun*kpc*km/s]": [np.inf],
+                "E_gal[Msun*(km/s)^2]": [np.nan],
+            }
+        )
+        scatter = Mock()
+        monkeypatch.setattr("dragon3_pipelines.visualization.single_star.sns.scatterplot", scatter)
+
+        vis.create_galactic_energy_angular_momentum_plot_jpg(df, "test_sim")
+
+        scatter.assert_not_called()
 
 
 class TestBinaryStarVisualizer:
@@ -825,6 +900,9 @@ class TestPlotPurger:
         assert len(single.matched_paths) == len(SINGLE_TARGETS)
         assert len(binary.matched_paths) == len(BINARY_TARGETS)
         assert len(hdf5.matched_paths) == len(PLOT_TARGETS)
+        assert (
+            "single.create_galactic_energy_angular_momentum_plot_jpg" in PlotPurger.list_targets()
+        )
 
     def test_simu_name_limits_prefix_and_all_sims_uses_all_prefixes(self, mock_config, tmp_path):
         mock_config.plot_dir = str(tmp_path)

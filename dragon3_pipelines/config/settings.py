@@ -121,6 +121,9 @@ class ConfigManager:
         self.selected_lagr_percent: List[str] = config["selected_lagr_percent"]
         self.current_lagrangian: Dict[str, Any] = config["current_lagrangian"]
         self.galactic_orbit: Dict[str, Any] = config["galactic_orbit"]
+        self.galactic_energy_angular_momentum: Dict[str, Any] = config[
+            "galactic_energy_angular_momentum"
+        ]
         self.binary_stellar_type_extraction: Dict[str, Any] = config[
             "binary_stellar_type_extraction"
         ]
@@ -200,6 +203,11 @@ class ConfigManager:
 
         if "galactic_orbit" in user_config:
             self.galactic_orbit.update(user_config["galactic_orbit"])
+
+        if "galactic_energy_angular_momentum" in user_config:
+            self.galactic_energy_angular_momentum.update(
+                user_config["galactic_energy_angular_momentum"]
+            )
 
         if "binary_stellar_type_extraction" in user_config:
             self.binary_stellar_type_extraction.update(
