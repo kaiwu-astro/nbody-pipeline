@@ -81,6 +81,14 @@ galactic_energy_angular_momentum:
 binary_stellar_type_extraction:
   cache_filename_template: "binaries_with_{target}_until_{last_ttot:.6f}.feather"
 
+# Per-snapshot compact-object (KW 10-14) rows, VO-safe schema, Parquet-backed
+compact_object_history:
+  enabled: true
+
+# One-row-per-snapshot cluster summary, VO-safe schema, Parquet-backed
+snapshot_summary:
+  enabled: true
+
 # Physical constants and thresholds
 physics:
   ECLOSE_INPUT: 1.0  # Binding energy per unit mass for hard binary (positive)

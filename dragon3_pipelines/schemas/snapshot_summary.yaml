@@ -80,46 +80,46 @@ columns:
     public: true
     nullable: false
   - name: rg_x_pc
-    # PROVISIONAL unit suffix: needs verification against GalacticOrbitVisualizer axis
-    # labels (RG columns may be kpc, not pc) before this table is relied upon.
+    # Unit confirmed pc (not kpc): dragon3_pipelines/analysis/galactic_energy_angular_momentum.py
+    # documents "raw RG/VG are interpreted as pc/km/s" and adds RG directly to X [pc] positions.
     dtype: float64
     unit: pc
     ucd: pos.cartesian.x
-    description: Galactocentric X position (scalars RG(1)); unit suffix provisional, see comment above.
+    description: Galactocentric X position (scalars RG(1)).
     public: true
     nullable: false
   - name: rg_y_pc
     dtype: float64
     unit: pc
     ucd: pos.cartesian.y
-    description: Galactocentric Y position (scalars RG(2)); unit suffix provisional, see rg_x_pc comment.
+    description: Galactocentric Y position (scalars RG(2)).
     public: true
     nullable: false
   - name: rg_z_pc
     dtype: float64
     unit: pc
     ucd: pos.cartesian.z
-    description: Galactocentric Z position (scalars RG(3)); unit suffix provisional, see rg_x_pc comment.
+    description: Galactocentric Z position (scalars RG(3)).
     public: true
     nullable: false
   - name: vg_x_kmps
     dtype: float64
     unit: km/s
     ucd: phys.veloc;pos.cartesian.x
-    description: Galactocentric X velocity (scalars VG(1)); unit suffix provisional, see rg_x_pc comment.
+    description: Galactocentric X velocity (scalars VG(1)).
     public: true
     nullable: false
   - name: vg_y_kmps
     dtype: float64
     unit: km/s
     ucd: phys.veloc;pos.cartesian.y
-    description: Galactocentric Y velocity (scalars VG(2)); unit suffix provisional, see rg_x_pc comment.
+    description: Galactocentric Y velocity (scalars VG(2)).
     public: true
     nullable: false
   - name: vg_z_kmps
     dtype: float64
     unit: km/s
     ucd: phys.veloc;pos.cartesian.z
-    description: Galactocentric Z velocity (scalars VG(3)); unit suffix provisional, see rg_x_pc comment.
+    description: Galactocentric Z velocity (scalars VG(3)).
     public: true
     nullable: false

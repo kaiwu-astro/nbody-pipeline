@@ -14,6 +14,14 @@ from dragon3_pipelines.analysis.initial_total_mass import InitialTotalMassAnalyz
 from dragon3_pipelines.analysis.intermediate_mass_black_hole import (
     IntermediateMassBlackHoleAnalyzer,
 )
+from dragon3_pipelines.analysis.compact_object_history import (
+    CompactObjectHistoryProcessor,
+    CompactObjectHistoryTask,
+)
+from dragon3_pipelines.analysis.snapshot_summary import (
+    SnapshotSummaryProcessor,
+    SnapshotSummaryTask,
+)
 from dragon3_pipelines.analysis.physics import (
     tau_gw,
     compute_binary_orbit_relative_positions,
@@ -31,6 +39,10 @@ __all__ = [
     "PrimordialBinaryIdentifier",
     "InitialTotalMassAnalyzer",
     "IntermediateMassBlackHoleAnalyzer",
+    "CompactObjectHistoryProcessor",
+    "CompactObjectHistoryTask",
+    "SnapshotSummaryProcessor",
+    "SnapshotSummaryTask",
     "tau_gw",
     "compute_binary_orbit_relative_positions",
     "compute_individual_orbit_params",

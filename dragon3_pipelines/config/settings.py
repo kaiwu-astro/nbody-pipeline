@@ -127,6 +127,8 @@ class ConfigManager:
         self.binary_stellar_type_extraction: Dict[str, Any] = config[
             "binary_stellar_type_extraction"
         ]
+        self.compact_object_history: Dict[str, Any] = config["compact_object_history"]
+        self.snapshot_summary: Dict[str, Any] = config["snapshot_summary"]
 
         # Physics constants
         phys = config["physics"]
@@ -213,6 +215,12 @@ class ConfigManager:
             self.binary_stellar_type_extraction.update(
                 user_config["binary_stellar_type_extraction"]
             )
+
+        if "compact_object_history" in user_config:
+            self.compact_object_history.update(user_config["compact_object_history"])
+
+        if "snapshot_summary" in user_config:
+            self.snapshot_summary.update(user_config["snapshot_summary"])
 
     def _raise_for_removed_config_keys(self, user_config: Dict[str, Any]) -> None:
         """Reject pre-1.0 scan configuration keys with migration guidance."""
