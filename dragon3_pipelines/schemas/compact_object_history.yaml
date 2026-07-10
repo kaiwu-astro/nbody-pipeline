@@ -1,0 +1,172 @@
+table: compact_object_history
+version: 1
+description: >
+  Per-snapshot rows for all compact objects (KW 10-14: white dwarfs, neutron
+  stars, black holes), covering both single stars and binary members.
+columns:
+  - name: simulation_id
+    dtype: string
+    unit: null
+    ucd: meta.id
+    description: Simulation config key this row belongs to (e.g. "20sb").
+    public: true
+    nullable: false
+  - name: ttot
+    dtype: float64
+    unit: null
+    ucd: time.epoch
+    description: Simulation time in N-body units.
+    public: true
+    nullable: false
+  - name: time_myr
+    dtype: float64
+    unit: Myr
+    ucd: time.epoch
+    description: Simulation time in megayears.
+    public: true
+    nullable: false
+  - name: object_id
+    dtype: int64
+    unit: null
+    ucd: meta.id
+    description: Object identifier (NAME column in the source HDF5 tables).
+    public: true
+    nullable: false
+  - name: kw
+    dtype: int64
+    unit: null
+    ucd: src.class
+    description: Stellar type (Hurley KW code) of this object.
+    public: true
+    nullable: false
+  - name: object_type
+    dtype: string
+    unit: null
+    ucd: meta.code.class
+    description: Human-readable object classification derived from kw (e.g. "BH", "NS", "WD").
+    public: true
+    nullable: false
+  - name: mass_msun
+    dtype: float64
+    unit: solMass
+    ucd: phys.mass
+    description: Object mass at this snapshot.
+    public: true
+    nullable: false
+  - name: x_pc
+    dtype: float64
+    unit: pc
+    ucd: pos.cartesian.x
+    description: >
+      X position in parsecs. For binary members this is the binary center-of-mass
+      position; member-level positions are not available in the source HDF5 tables.
+    public: true
+    nullable: false
+  - name: y_pc
+    dtype: float64
+    unit: pc
+    ucd: pos.cartesian.y
+    description: >
+      Y position in parsecs. For binary members this is the binary center-of-mass
+      position; member-level positions are not available in the source HDF5 tables.
+    public: true
+    nullable: false
+  - name: z_pc
+    dtype: float64
+    unit: pc
+    ucd: pos.cartesian.z
+    description: >
+      Z position in parsecs. For binary members this is the binary center-of-mass
+      position; member-level positions are not available in the source HDF5 tables.
+    public: true
+    nullable: false
+  - name: vx_kms
+    dtype: float64
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.x
+    description: >
+      X velocity in km/s. For binary members this is the binary center-of-mass
+      velocity; member-level velocities are not available in the source HDF5 tables.
+    public: true
+    nullable: false
+  - name: vy_kms
+    dtype: float64
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.y
+    description: >
+      Y velocity in km/s. For binary members this is the binary center-of-mass
+      velocity; member-level velocities are not available in the source HDF5 tables.
+    public: true
+    nullable: false
+  - name: vz_kms
+    dtype: float64
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.z
+    description: >
+      Z velocity in km/s. For binary members this is the binary center-of-mass
+      velocity; member-level velocities are not available in the source HDF5 tables.
+    public: true
+    nullable: false
+  - name: r_pc
+    dtype: float64
+    unit: pc
+    ucd: pos.distance
+    description: Distance from the cluster density center, in parsecs.
+    public: true
+    nullable: false
+  - name: is_in_binary
+    dtype: bool
+    unit: null
+    ucd: meta.code
+    description: Whether this object is a member of a binary at this snapshot.
+    public: true
+    nullable: false
+  - name: companion_id
+    dtype: Int64
+    unit: null
+    ucd: meta.id
+    description: Object identifier of the binary companion, if is_in_binary is true.
+    public: true
+    nullable: true
+  - name: companion_kw
+    dtype: Int64
+    unit: null
+    ucd: src.class
+    description: Stellar type (KW code) of the binary companion, if is_in_binary is true.
+    public: true
+    nullable: true
+  - name: binary_cm_id
+    dtype: Int64
+    unit: null
+    ucd: meta.id
+    description: Identifier of the enclosing binary center-of-mass record, if is_in_binary is true.
+    public: true
+    nullable: true
+  - name: companion_mass_msun
+    dtype: float64
+    unit: solMass
+    ucd: phys.mass
+    description: Mass of the binary companion, if is_in_binary is true.
+    public: true
+    nullable: true
+  - name: semi_major_axis_au
+    dtype: float64
+    unit: AU
+    ucd: phys.size.smajAxis
+    description: Binary semi-major axis, if is_in_binary is true.
+    public: true
+    nullable: true
+  - name: eccentricity
+    dtype: float64
+    unit: null
+    ucd: src.orbital.eccentricity
+    description: Binary orbital eccentricity, if is_in_binary is true.
+    public: true
+    nullable: true
+  - name: source_hdf5_path
+    dtype: string
+    unit: null
+    ucd: meta.ref.url
+    description: Absolute path of the source HDF5 file this row was derived from (provenance only).
+    public: false
+    nullable: false

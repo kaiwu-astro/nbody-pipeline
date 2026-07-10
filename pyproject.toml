@@ -55,10 +55,11 @@ dev = [
 dragon3-plot = "dragon3_pipelines.__main__:main"
 
 [tool.setuptools]
-packages = ["dragon3_pipelines"]
+packages = ["dragon3_pipelines", "dragon3_pipelines.schemas"]
 
 [tool.setuptools.package-data]
 dragon3_pipelines = ["config/*.yaml"]
+"dragon3_pipelines.schemas" = ["*.yaml"]
 
 [tool.black]
 line-length = 100
