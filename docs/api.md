@@ -136,6 +136,50 @@ Compute per-star galactocentric kinetic energy, potential energy, total energy, 
 
 Calculate gravitational wave merger timescales.
 
+## Schema Registry
+
+### `dragon3_pipelines.schemas`
+
+VO-safe (`^[a-z][a-z0-9_]*$` + unit-suffixed) column schema definitions for the Parquet/DuckDB analysis layer, one YAML file per table. Each column carries `dtype`, `unit`, `ucd`, `description`, `public`, and `nullable`. See `docs/analysis_architecture.md` for the caching layers this schema registry backs.
+
+```python
+from dragon3_pipelines.schemas import load_table_schema
+
+schema = load_table_schema("compact_object_history")
+schema.column_names()   # -> tuple of VO-safe column names
+schema.empty_dataframe()  # correctly-typed empty frame, useful as a cache sentinel
+schema.schema_hash()    # sha1 over (name, dtype) pairs; bumps when columns change
+schema.validate_dataframe(df)  # raises SchemaValidationError on mismatch
+```
+
+Registered tables: `compact_object_history` (per-snapshot rows for compact objects, KW 10-14), `snapshot_summary` (one row per TTOT with population counts and structural parameters).
+
+## Query Layer
+
+### `dragon3_pipelines.query`
+
+DuckDB read path over the Parquet feature store written by `ParquetDatasetCacheMixin`/`ParquetTableCacheMixin` tasks (`dragon3_pipelines.analysis.parquet_cache`). Prefer this over loading raw HDF5 for anything that only needs the small pre-computed feature tables.
+
+```python
+from dragon3_pipelines.config import ConfigManager
+from dragon3_pipelines.query import load_feature, duckdb_connect
+
+config = ConfigManager()
+
+# One simulation, filtered, as a DataFrame:
+bh = load_feature(
+    config, "20sb", "compact_object_history",
+    columns=["ttot", "object_id", "mass_msun"],
+    where="kw = 14 AND mass_msun > ?", params=[20.0],
+)
+
+# Cross-simulation SQL, one VIEW per feature (union'd on simulation_id):
+con = duckdb_connect(config)
+con.execute("SELECT simulation_id, count(*) FROM compact_object_history GROUP BY 1").df()
+```
+
+`load_feature` and `duckdb_connect` transparently handle both on-disk layouts (a directory of per-source-file Parquet parts, or one merged Parquet table) and raise a friendly error pointing at `python -m dragon3_pipelines analyze` when a feature hasn't been built yet for a simulation. `duckdb_connect` skips (rather than errors on) any simulation/feature pair with no data on disk.
+
 ## Visualization
 
 ### Base Classes
