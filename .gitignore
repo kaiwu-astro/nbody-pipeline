@@ -1,4 +1,6 @@
+*.md
 *.csv
+examples/
 implementation-notes.html
 
 # Byte-compiled / optimized / DLL files
