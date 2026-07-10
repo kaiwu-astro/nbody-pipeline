@@ -4,15 +4,20 @@
 
 ### `dragon3_pipelines.config.ConfigManager`
 
-Main configuration class for managing simulation settings.
+Main configuration class for managing simulation settings. The packaged default
+ships no site-specific paths (`paths.simulations`/`plot_dir`/`analysis_cache_dir`),
+so `ConfigManager()`/examples below assume a user config (see
+[`config.example.yaml`](../config.example.yaml)) has been supplied via `config_path=`,
+`--config`, `DRAGON3_CONFIG`, or `./dragon3_config.yaml` — otherwise construction
+raises a `ValueError` naming the missing keys.
 
 ```python
 from dragon3_pipelines.config import ConfigManager, load_config
 
-# Load default configuration
-config = ConfigManager()
-
 # Load with custom YAML
+config = ConfigManager(config_path="my_config.yaml")
+
+# Equivalent convenience function
 config = load_config("my_config.yaml")
 ```
 

@@ -1101,7 +1101,7 @@ class TestPurgeCLI:
         captured = {}
 
         class FakeConfig:
-            def __init__(self, opts=None):
+            def __init__(self, config_path=None, opts=None):
                 captured["opts"] = opts
 
         class FakePlotter:
@@ -1132,7 +1132,9 @@ class TestPurgeCLI:
         mock_config.plot_dir = str(tmp_path)
         mock_config.figname_prefix = {"sim_a": "a_"}
         _touch_plot(tmp_path, "a_", "x1_vs_x2")
-        monkeypatch.setattr(main_module, "ConfigManager", lambda opts=None: mock_config)
+        monkeypatch.setattr(
+            main_module, "ConfigManager", lambda config_path=None, opts=None: mock_config
+        )
 
         assert (
             main_module.main(
@@ -1150,7 +1152,9 @@ class TestPurgeCLI:
         mock_config.plot_dir = str(tmp_path)
         mock_config.figname_prefix = {"sim_a": "a_"}
         path = _touch_plot(tmp_path, "a_", "x1_vs_x2")
-        monkeypatch.setattr(main_module, "ConfigManager", lambda opts=None: mock_config)
+        monkeypatch.setattr(
+            main_module, "ConfigManager", lambda config_path=None, opts=None: mock_config
+        )
 
         assert (
             main_module.main(

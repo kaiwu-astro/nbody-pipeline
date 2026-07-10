@@ -3,7 +3,7 @@
 import os
 import re
 from functools import lru_cache
-from typing import Dict, Union
+from typing import Dict, Optional, Union
 
 import h5py
 import numpy as np
@@ -481,10 +481,22 @@ def tau_gw(
 
 
 def load_GWTC_catalog(
-    csvpath: str = "/p/project1/madnuc/wu13/intermediate_data/GWTC_catalog.csv",
+    csvpath: Optional[str] = None,
     reload: bool = False,
 ) -> pd.DataFrame:
-    """Load GWTC gravitational wave catalog"""
+    """Load GWTC gravitational wave catalog
+
+    Args:
+        csvpath: Path to the GWTC catalog CSV file. No default is shipped with
+            the package; pass an explicit path (e.g. from
+            ``config.gwtc_catalog_csv``) or raises FileNotFoundError.
+        reload: Force recomputation even if a cached .pkl exists.
+    """
+    if not csvpath:
+        raise FileNotFoundError(
+            "No GWTC catalog CSV path provided. Pass csvpath explicitly, or set "
+            "paths.gwtc_catalog_csv in your user config (see config.example.yaml)."
+        )
     if not reload and os.path.exists(os.path.splitext(csvpath)[0] + ".pkl"):
         return pd.read_pickle(os.path.splitext(csvpath)[0] + ".pkl")
 

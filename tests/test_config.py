@@ -2,8 +2,6 @@
 Tests for dragon3_pipelines.config module
 """
 
-from pathlib import Path
-
 import yaml
 import pytest
 
@@ -11,12 +9,33 @@ from dragon3_pipelines.config import ConfigManager, load_config
 import dragon3_pipelines
 
 
+@pytest.fixture
+def base_paths_config(temp_dir):
+    """Minimal user config satisfying ConfigManager's required path keys.
+
+    The packaged default config ships no site-specific paths (see
+    config.example.yaml), so tests that exercise a "working" ConfigManager
+    must supply paths.simulations/plot_dir/analysis_cache_dir themselves.
+    """
+    config_path = temp_dir / "base_paths_config.yaml"
+    user_config = {
+        "paths": {
+            "simulations": {"0sb": str(temp_dir / "0sb")},
+            "plot_dir": str(temp_dir / "plots"),
+            "analysis_cache_dir": str(temp_dir / "analysis_cache"),
+        },
+    }
+    with open(config_path, "w") as f:
+        yaml.dump(user_config, f)
+    return config_path
+
+
 class TestConfigManager:
     """Tests for ConfigManager class"""
 
-    def test_load_default_config(self):
+    def test_load_default_config(self, base_paths_config):
         """Test loading default configuration"""
-        config = ConfigManager()
+        config = ConfigManager(config_path=str(base_paths_config))
 
         # Check basic attributes are loaded
         assert hasattr(config, "pathof")
@@ -54,9 +73,9 @@ class TestConfigManager:
         assert all(isinstance(key, int) for key in config.kw_to_stellar_type)
         assert all(isinstance(value, str) for value in config.kw_to_stellar_type.values())
 
-    def test_derived_attributes(self):
+    def test_derived_attributes(self, base_paths_config):
         """Test that derived attributes are created correctly"""
-        config = ConfigManager()
+        config = ConfigManager(config_path=str(base_paths_config))
 
         # Check reverse mappings
         assert hasattr(config, "stellar_type_to_kw")
@@ -83,20 +102,40 @@ class TestConfigManager:
         max_expected = int(config.mem_max_gb * 1024**3) // 2
         assert config.mem_cap_bytes <= max_expected
 
-    def test_load_config_function(self):
+    def test_load_config_function(self, base_paths_config):
         """Test load_config convenience function"""
-        config = load_config()
+        config = load_config(str(base_paths_config))
         assert isinstance(config, ConfigManager)
         assert hasattr(config, "pathof")
 
-    def test_default_analysis_cache_paths(self):
-        """Test default analysis cache root and derived feature directories."""
-        config = ConfigManager()
-        default_config_path = (
-            Path(__file__).parents[1] / "dragon3_pipelines" / "config" / "default_config.yaml"
-        )
-        with open(default_config_path) as f:
-            root = yaml.safe_load(f)["paths"]["analysis_cache_dir"]
+    def test_missing_paths_raise_clear_error(self):
+        """A fresh install with no user config must fail with actionable guidance."""
+        with pytest.raises(ValueError, match="config.example.yaml") as exc_info:
+            ConfigManager()
+        assert "paths.simulations" in str(exc_info.value)
+        assert "paths.plot_dir" in str(exc_info.value)
+        assert "paths.analysis_cache_dir" in str(exc_info.value)
+
+    def test_partial_paths_raise_clear_error(self, temp_dir):
+        """Missing a single required path key must still be reported explicitly."""
+        user_config = {
+            "paths": {
+                "simulations": {"0sb": str(temp_dir / "0sb")},
+                "plot_dir": str(temp_dir / "plots"),
+                # analysis_cache_dir intentionally omitted
+            }
+        }
+        user_config_path = temp_dir / "partial_config.yaml"
+        with open(user_config_path, "w") as f:
+            yaml.dump(user_config, f)
+
+        with pytest.raises(ValueError, match="paths.analysis_cache_dir"):
+            ConfigManager(config_path=str(user_config_path))
+
+    def test_default_analysis_cache_paths(self, base_paths_config, temp_dir):
+        """Test analysis cache root and derived feature directories."""
+        config = ConfigManager(config_path=str(base_paths_config))
+        root = str(temp_dir / "analysis_cache")
 
         assert config.analysis_cache_dir == root
         assert config.analysis_cache_dir_of["0sb"] == f"{root}/0sb"
@@ -105,7 +144,13 @@ class TestConfigManager:
     def test_user_config_overrides_analysis_cache_dir(self, temp_dir):
         """Test user config can override the analysis cache root."""
         root = str(temp_dir / "analysis_cache")
-        user_config = {"paths": {"analysis_cache_dir": root}}
+        user_config = {
+            "paths": {
+                "simulations": {"0sb": str(temp_dir / "0sb")},
+                "plot_dir": str(temp_dir / "plots"),
+                "analysis_cache_dir": root,
+            }
+        }
         user_config_path = temp_dir / "user_cache_config.yaml"
         with open(user_config_path, "w") as f:
             yaml.dump(user_config, f)
@@ -119,6 +164,11 @@ class TestConfigManager:
     def test_user_config_overrides_galactic_orbit_and_hdf5(self, temp_dir):
         """Test user config can override feature and global HDF5 settings."""
         user_config = {
+            "paths": {
+                "simulations": {"0sb": str(temp_dir / "0sb")},
+                "plot_dir": str(temp_dir / "plots"),
+                "analysis_cache_dir": str(temp_dir / "analysis_cache"),
+            },
             "galactic_orbit": {"enabled": False, "time_color_max_myr": 750.0},
             "galactic_energy_angular_momentum": {
                 "enabled": False,
@@ -163,7 +213,11 @@ class TestConfigManager:
         """Test merging user configuration with defaults"""
         # Create a user config file
         user_config = {
-            "paths": {"simulations": {"test_sim": "/path/to/test"}, "plot_dir": "/custom/plot/dir"},
+            "paths": {
+                "simulations": {"test_sim": "/path/to/test"},
+                "plot_dir": "/custom/plot/dir",
+                "analysis_cache_dir": str(temp_dir / "analysis_cache"),
+            },
             "processing": {"processes_count": 20, "mem_max_gb": 80.0, "inode_limit": 5000000},
         }
 
@@ -180,25 +234,22 @@ class TestConfigManager:
         assert config.inode_limit == 5000000
         assert "test_sim" in config.pathof
 
-        # Check that defaults are still present
-        assert "0sb" in config.pathof  # from default config
-
         # Check that mem_cap_bytes is recalculated with new value
         max_expected = int(80.0 * 1024**3) // 2
         assert config.mem_cap_bytes <= max_expected
 
-    def test_physics_constants(self):
+    def test_physics_constants(self, base_paths_config):
         """Test physics constants are loaded correctly"""
-        config = ConfigManager()
+        config = ConfigManager(config_path=str(base_paths_config))
 
         assert isinstance(config.IMBH_mass_range_msun, tuple)
         assert len(config.IMBH_mass_range_msun) == 2
         assert isinstance(config.PISNe_mass_gap, tuple)
         assert len(config.PISNe_mass_gap) == 2
 
-    def test_limits_and_labels(self):
+    def test_limits_and_labels(self, base_paths_config):
         """Test that limits and labels are loaded"""
-        config = ConfigManager()
+        config = ConfigManager(config_path=str(base_paths_config))
 
         assert hasattr(config, "limits")
         assert isinstance(config.limits, dict)

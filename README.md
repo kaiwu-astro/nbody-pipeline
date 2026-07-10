@@ -30,6 +30,18 @@ Run the shared CI test entrypoint:
 
 The CI script runs pytest in parallel with pytest-xdist, using at most 8 workers.
 
+### Reproducing an Exact Environment
+
+`requirements.lock` is a pinned snapshot (`pip freeze --exclude-editable`) of the
+environment used to produce the results in a given release, refreshed automatically
+by `scripts/release.sh`. It is not an installation constraint (use the looser
+dependency ranges in `pyproject.toml`/`pip install -e .` for that) — use it when you
+need to reproduce results bit-for-bit:
+
+```bash
+pip install -r requirements.lock
+```
+
 ## Quick Start
 
 ### Using the Command Line
@@ -68,7 +80,7 @@ from dragon3_pipelines.analysis import InitialTotalMassAnalyzer, ParticleTracker
 from dragon3_pipelines.visualization import SingleStarVisualizer
 
 # Create custom configuration
-config = ConfigManager()
+config = ConfigManager(config_path="my_config.yaml")  # see Configuration below
 config.processes_count = 20
 
 # Use visualizers
@@ -80,45 +92,42 @@ initial_mass_msun = InitialTotalMassAnalyzer(config).get_initial_total_mass_msun
 
 ## Configuration
 
-### Using YAML Configuration
+The packaged default config (`dragon3_pipelines/config/default_config.yaml`) ships
+**no site-specific paths** — `paths.simulations`, `paths.plot_dir`, and
+`paths.analysis_cache_dir` are empty/`null` out of the box. Constructing a
+`ConfigManager` without a user config that fills these in raises a clear
+`ValueError` naming exactly which keys are missing. Everything else (physical
+constants, stellar-type tables, plot limits, ...) has working scientific defaults
+and does not need to be overridden.
 
-Create a custom `config.yaml`:
+### Providing a User Config
 
-```yaml
-paths:
-  simulations:
-    my_sim: "/path/to/simulation"
-  plot_dir: "/path/to/plots"
+Copy [`config.example.yaml`](config.example.yaml) (a fully annotated template) and
+fill in your paths, then point the CLI at it, in priority order:
 
-processing:
-  processes_count: 40
-  skip_existing_plot: true
-
-hdf5:
-  file_selection:
-    wait_age_hour: 24
-    sample_every_nb_time: 1.0
-    exclude_bad_dirname: true
-  table_cache:
-    use_hdf5_cache: true
-  scan:
-    parallel: false
-    incremental_from_cache_tail: true
-
-galactic_orbit:
-  enabled: true
-  time_color_max_myr: 500.0
-
-galactic_energy_angular_momentum:
-  enabled: true
-  percentile_limits: [0.1, 99.9]
+```bash
+python -m dragon3_pipelines --config /path/to/my_config.yaml
+# or
+export DRAGON3_CONFIG=/path/to/my_config.yaml
+python -m dragon3_pipelines
+# or drop it at ./dragon3_config.yaml in the current directory
 ```
 
-Load it in your code:
+`purge --list-targets` and `--help`/`help` work without any config. The main
+pipeline and the `purge`/`analyze` subcommands need a config supplying at least
+`paths.simulations`, `paths.plot_dir`, and `paths.analysis_cache_dir`.
+
+madnuc/JUWELS users can use the tracked site config directly:
+
+```bash
+export DRAGON3_CONFIG=configs/juwels_madnuc.yaml
+```
+
+### Loading a Config in Code
 
 ```python
 from dragon3_pipelines.config import load_config
-config = load_config("config.yaml")
+config = load_config("my_config.yaml")
 ```
 
 ## Package Structure
@@ -140,7 +149,7 @@ dragon3_pipelines/
 - **Backward Compatible**: All old scripts and imports still work
 - **Configurable**: YAML-based configuration with sensible defaults
 - **Parallel Processing**: Multi-process support for analyzing large datasets
-- **Comprehensive Testing**: 87+ unit tests covering all modules
+- **Comprehensive Testing**: 250+ unit tests covering all modules
 
 ## Usage Examples
 
@@ -150,7 +159,7 @@ dragon3_pipelines/
 from dragon3_pipelines.io import HDF5FileProcessor
 from dragon3_pipelines.config import ConfigManager
 
-config = ConfigManager()
+config = ConfigManager(config_path="my_config.yaml")  # see Configuration below
 processor = HDF5FileProcessor(config)
 df_dict = processor.read_file(hdf5_path="/path/to/file.h5part", simu_name="my_sim")
 # df_dict contains 'scalars', 'singles', 'binaries', 'mergers' DataFrames
@@ -162,7 +171,7 @@ df_dict = processor.read_file(hdf5_path="/path/to/file.h5part", simu_name="my_si
 from dragon3_pipelines.analysis import ParticleTracker
 from dragon3_pipelines.config import ConfigManager
 
-config = ConfigManager()
+config = ConfigManager(config_path="my_config.yaml")  # see Configuration below
 tracker = ParticleTracker(config)
 particle_history = tracker.update_one_particle_history_df(simu_name="my_sim", particle_name=12345)
 ```
@@ -173,7 +182,7 @@ particle_history = tracker.update_one_particle_history_df(simu_name="my_sim", pa
 from dragon3_pipelines.analysis import BinaryStellarTypeExtractor
 from dragon3_pipelines.config import ConfigManager
 
-config = ConfigManager()
+config = ConfigManager(config_path="my_config.yaml")  # see Configuration below
 extractor = BinaryStellarTypeExtractor(config)
 bh_binaries = extractor.load_binaries_with_stellar_type("my_sim", stellar_type="BH")
 ns_binaries = extractor.load_binaries_with_stellar_type("my_sim", kw=13)
@@ -243,7 +252,7 @@ The default HDF5 plotting flow creates `jpg/{prefix}output_ttot_{ttot}_galactic_
 from dragon3_pipelines.visualization import BinaryStarVisualizer
 from dragon3_pipelines.config import ConfigManager
 
-config = ConfigManager()
+config = ConfigManager(config_path="my_config.yaml")  # see Configuration below
 viz = BinaryStarVisualizer(config)
 # Get binary data at a specific time first
 binary_df_at_t = df_dict['binaries'][df_dict['binaries']['TTOT'] == 100.0]
@@ -256,6 +265,7 @@ viz.create_mass_ratio_m1_plot_density(binary_df_at_t, simu_name="my_sim")
 - `help purge`: Show purge command help
 - `--skip-until=N`: Start processing from time N
 - `--skip-until=last`: Resume from last processed time
+- `--config=PATH`: Path to a user config YAML (see [Configuration](#configuration))
 - `--debug`: Enable debug logging
 
 The installed `dragon3-plot` script accepts the same arguments as `python -m dragon3_pipelines`.
@@ -273,6 +283,20 @@ python -m dragon3_pipelines purge single.create_galactic_energy_angular_momentum
 # Delete matching files without an interactive confirmation
 python -m dragon3_pipelines purge single.create_position_plot_jpg --simu sim_a --yes
 ```
+
+## Versioning & Changelog
+
+This project follows [Semantic Versioning](https://semver.org/); `MAJOR.MINOR.PATCH`
+bumps track the API compatibility constraints in [`docs/api.md`](docs/api.md) (breaking
+changes to public methods/parameters/return structures bump `MAJOR`). The single
+source of truth for the current version is `dragon3_pipelines.__version__`.
+See [`CHANGELOG.md`](CHANGELOG.md) (Keep a Changelog format) for what changed in each
+release, and [`AGENTS.md`](AGENTS.md) for the release checklist and `scripts/release.sh`.
+
+## Citation
+
+See [`CITATION.cff`](CITATION.cff). A Zenodo DOI is not yet minted for this project;
+if that changes, this section and `CITATION.cff` will be updated with the DOI.
 
 ## Contributing
 

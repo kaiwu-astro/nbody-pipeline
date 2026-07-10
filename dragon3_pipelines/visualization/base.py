@@ -72,7 +72,9 @@ class BaseVisualizer:
             config_manager: Configuration manager instance
         """
         self.config = config_manager
-        self.teff_to_rgb_converter = BlackbodyColorConverter()
+        self.teff_to_rgb_converter = BlackbodyColorConverter(
+            cache_path=getattr(config_manager, "teff_rgb_cache", None)
+        )
         self.setup_figure_style()
 
     def setup_figure_style(self) -> None:

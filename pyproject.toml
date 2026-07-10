@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dragon3_pipelines"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Pipelines for Dragon3 N-body simulation data analysis and visualization"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -57,6 +57,9 @@ dragon3-plot = "dragon3_pipelines.__main__:main"
 
 [tool.setuptools]
 packages = ["dragon3_pipelines", "dragon3_pipelines.schemas"]
+
+[tool.setuptools.dynamic]
+version = {attr = "dragon3_pipelines.__version__"}
 
 [tool.setuptools.package-data]
 dragon3_pipelines = ["config/*.yaml"]

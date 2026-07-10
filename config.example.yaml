@@ -1,0 +1,97 @@
+# Dragon3 Pipelines - example user configuration.
+#
+# Copy this file, fill in your own paths, and point dragon3_pipelines at it:
+#   --config /path/to/your_config.yaml
+#   export DRAGON3_CONFIG=/path/to/your_config.yaml
+#   or place it at ./dragon3_config.yaml (repo root / current directory)
+# Priority: --config > DRAGON3_CONFIG > ./dragon3_config.yaml.
+#
+# Only the sections below are merged into the packaged default config
+# (dragon3_pipelines/config/default_config.yaml). Physical constants,
+# stellar-type tables, plot limits, and column labels are fixed science
+# defaults and are not user-overridable through this file; edit the package
+# default (or open a PR) if those genuinely need to change.
+#
+# See also: configs/juwels_madnuc.yaml for a real, tracked example used on
+# the JUWELS madnuc cluster.
+
+paths:
+  # One entry per simulation. The key (e.g. "20sb") is the simu_name used
+  # throughout the CLI and API (--simu, config.pathof, cache directories, ...).
+  simulations:
+    my_sim: "/path/to/my_sim"
+
+  # Optional: input file (e.g. NBODY/Dragon3 .inp) relative to each
+  # simulation's directory above. Only needed for features that read the
+  # initial input file (e.g. InitialTotalMassAnalyzer).
+  input_files:
+    my_sim: "N1m-Dragon3.inp.init"
+
+  # Required: where generated plots are written (jpg/, pdf, html, ...).
+  plot_dir: "/path/to/plots"
+
+  # Required: root directory for analysis-produced intermediate/feature-store
+  # caches. Layout is <analysis_cache_dir>/<simu_name>/<feature>/...
+  analysis_cache_dir: "/path/to/analysis_cache"
+
+  # Optional: override the cached blackbody-temperature-to-RGB interpolator
+  # location used by CMD/color plots. Defaults to
+  # ~/.cache/dragon3_pipelines/teff_to_rgb.pkl if unset.
+  # teff_rgb_cache: "/path/to/teff_to_rgb.pkl"
+
+  # Optional: CSV path for the GWTC gravitational-wave catalog overlay used by
+  # collision/coalescence plots. If unset, that overlay is skipped (with a
+  # warning) instead of failing the plotting run.
+  # gwtc_catalog_csv: "/path/to/GWTC_catalog.csv"
+
+# Optional: figure filename prefix per simulation (defaults to "" if unset).
+figure_prefixes:
+  my_sim: "my_sim_2026"
+
+processing:
+  # Per-simulation N-body time to resume from: a float, or "last" to resume
+  # from the latest existing plot for that simulation.
+  skip_until:
+    my_sim: "last"
+  skip_existing_plot: true
+  close_figure_in_ipython: false
+  processes_count: 40
+  tasks_per_child: 3
+  mem_max_gb: 40.0
+  inode_limit: 2000000
+
+# Global HDF5 file selection, table-cache, and scan options (controls both
+# the main plotting flow and analyze/HDF5ScanTask-based analyses).
+hdf5:
+  file_selection:
+    wait_age_hour: 24
+    sample_every_nb_time: 1.0
+    exclude_bad_dirname: true
+  table_cache:
+    use_hdf5_cache: true
+  scan:
+    parallel: true
+    incremental_from_cache_tail: true
+    checkpoint_every_files: 100
+
+current_lagrangian:
+  enabled: true
+  cache_filename: "current_mass_lagr.feather"
+
+galactic_orbit:
+  enabled: true
+  cache_filename: "galactic_orbit.feather"
+  time_color_max_myr: 500.0
+
+galactic_energy_angular_momentum:
+  enabled: true
+  percentile_limits: [0.1, 99.9]
+
+binary_stellar_type_extraction:
+  cache_filename_template: "binaries_with_{target}_until_{last_ttot:.6f}.feather"
+
+compact_object_history:
+  enabled: true
+
+snapshot_summary:
+  enabled: true

@@ -3,6 +3,7 @@ Color conversion utilities for blackbody radiation
 """
 
 import os
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from typing import Union, Optional
@@ -19,18 +20,23 @@ except (ImportError, ModuleNotFoundError):
     COLOUR_AVAILABLE = False
 
 
+DEFAULT_TEFF_RGB_CACHE_PATH = str(Path("~/.cache/dragon3_pipelines/teff_to_rgb.pkl").expanduser())
+
+
 class BlackbodyColorConverter:
     """Convert blackbody radiation temperature to RGB colors"""
 
     def __init__(
         self,
-        cache_path: str = "/p/home/jusers/wu13/juwels/project/intermediate_data/teff_to_rgb.pkl",
+        cache_path: Optional[str] = None,
     ):
         """
         Initialize the color converter.
 
         Args:
-            cache_path: Path to cache file for RGB interpolators
+            cache_path: Path to cache file for RGB interpolators. Defaults to
+                ``~/.cache/dragon3_pipelines/teff_to_rgb.pkl``; the cache is
+                recomputed automatically if missing.
         """
         if not COLOUR_AVAILABLE:
             raise ImportError(
@@ -38,7 +44,7 @@ class BlackbodyColorConverter:
                 "Install it with: pip install colour-science"
             )
 
-        self.cache_path = cache_path
+        self.cache_path = cache_path or DEFAULT_TEFF_RGB_CACHE_PATH
         self.r_interp: Optional[interp1d] = None
         self.g_interp: Optional[interp1d] = None
         self.b_interp: Optional[interp1d] = None
@@ -116,6 +122,7 @@ class BlackbodyColorConverter:
                 df_sorted["Teff"], df_sorted["B"], kind="cubic", fill_value="extrapolate"
             )
 
+            Path(self.cache_path).parent.mkdir(parents=True, exist_ok=True)
             save(self.cache_path, [r_interp, g_interp, b_interp])
             self.r_interp, self.g_interp, self.b_interp = r_interp, g_interp, b_interp
 

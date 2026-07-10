@@ -91,20 +91,29 @@ class ConfigManager:
         with open(default_config_path, "r") as f:
             config = yaml.safe_load(f)
 
-        # Path configurations
+        # Path configurations. The packaged default ships no site-specific paths
+        # (see config.example.yaml); real values come from a user config supplied
+        # via --config / DRAGON3_CONFIG / ./dragon3_config.yaml.
         paths = config["paths"]
-        self.pathof: Dict[str, str] = paths["simulations"]
-        self.plot_dir: str = paths["plot_dir"]
+        self.pathof: Dict[str, str] = paths.get("simulations") or {}
+        self.plot_dir: Optional[str] = paths.get("plot_dir")
 
         self.analysis_cache_dir: Optional[str] = paths.get("analysis_cache_dir")
         self._legacy_cache_dir_suffix: Optional[str] = paths.get("cache_dir_suffix")
+        self._input_files_of: Dict[str, str] = paths.get("input_files") or {}
 
-        self.input_file_path_of = {
-            k: self.pathof[k] + "/" + paths["input_files"][k] for k in self.pathof.keys()
-        }
+        # Optional standalone-cache path overrides (fall back to sensible
+        # defaults in the consuming code when unset).
+        self.teff_rgb_cache: Optional[str] = paths.get("teff_rgb_cache")
+        self.gwtc_catalog_csv: Optional[str] = paths.get("gwtc_catalog_csv")
+
+        # input_file_path_of is derived after user config merge (see
+        # _setup_derived_attributes) since paths.simulations/input_files can both
+        # be extended by the user config.
+        self.input_file_path_of: Dict[str, str] = {}
 
         # Figure name prefixes
-        self.figname_prefix: Dict[str, str] = config["figure_prefixes"]
+        self.figname_prefix: Dict[str, str] = config.get("figure_prefixes") or {}
 
         # Processing options
         proc = config["processing"]
@@ -173,12 +182,21 @@ class ConfigManager:
         if "paths" in user_config:
             if "simulations" in user_config["paths"]:
                 self.pathof.update(user_config["paths"]["simulations"])
+            if "input_files" in user_config["paths"]:
+                self._input_files_of.update(user_config["paths"]["input_files"])
             if "plot_dir" in user_config["paths"]:
                 self.plot_dir = user_config["paths"]["plot_dir"]
             if "analysis_cache_dir" in user_config["paths"]:
                 self.analysis_cache_dir = user_config["paths"]["analysis_cache_dir"]
             elif "cache_dir_suffix" in user_config["paths"] and not self.analysis_cache_dir:
                 self._legacy_cache_dir_suffix = user_config["paths"]["cache_dir_suffix"]
+            if "teff_rgb_cache" in user_config["paths"]:
+                self.teff_rgb_cache = user_config["paths"]["teff_rgb_cache"]
+            if "gwtc_catalog_csv" in user_config["paths"]:
+                self.gwtc_catalog_csv = user_config["paths"]["gwtc_catalog_csv"]
+
+        if "figure_prefixes" in user_config:
+            self.figname_prefix.update(user_config["figure_prefixes"])
 
         if "processing" in user_config:
             proc = user_config["processing"]
@@ -250,6 +268,27 @@ class ConfigManager:
 
     def _setup_derived_attributes(self) -> None:
         """Set up derived attributes that depend on configuration"""
+        missing: List[str] = []
+        if not self.pathof:
+            missing.append("paths.simulations")
+        if not self.plot_dir:
+            missing.append("paths.plot_dir")
+        if not self.analysis_cache_dir and not self._legacy_cache_dir_suffix:
+            missing.append("paths.analysis_cache_dir")
+        if missing:
+            raise ValueError(
+                "Missing required path configuration: "
+                + ", ".join(missing)
+                + ". Provide a user config (see config.example.yaml for a template) via "
+                "--config, the DRAGON3_CONFIG environment variable, or ./dragon3_config.yaml."
+            )
+
+        self.input_file_path_of = {
+            simu_name: f"{self.pathof[simu_name]}/{self._input_files_of[simu_name]}"
+            for simu_name in self.pathof
+            if simu_name in self._input_files_of
+        }
+
         if self.analysis_cache_dir:
             analysis_root = Path(self.analysis_cache_dir)
             self.analysis_cache_dir_of = {
@@ -259,14 +298,12 @@ class ConfigManager:
                 simu_name: str(Path(cache_dir) / "particle_df")
                 for simu_name, cache_dir in self.analysis_cache_dir_of.items()
             }
-        elif self._legacy_cache_dir_suffix:
+        else:
             self.analysis_cache_dir_of = {
                 simu_name: str(Path(path) / self._legacy_cache_dir_suffix.lstrip("/"))
                 for simu_name, path in self.pathof.items()
             }
             self.particle_df_cache_dir_of = dict(self.analysis_cache_dir_of)
-        else:
-            raise ValueError("paths.analysis_cache_dir is required for analysis cache paths.")
 
         # Calculate memory capacity
         try:

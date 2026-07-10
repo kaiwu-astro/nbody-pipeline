@@ -44,6 +44,28 @@ except NameError:
     logger = logging.getLogger(__name__)
     logging.basicConfig(level=logging.INFO, handlers=[RichHandler(rich_tracebacks=True)])
 
+_CONFIG_DISCOVERY_HELP = (
+    "resolution order: --config > DRAGON3_CONFIG env var > ./dragon3_config.yaml"
+)
+
+
+def _resolve_config_path(cli_config: str | None) -> str | None:
+    """Resolve the user config path.
+
+    Priority: --config CLI argument > DRAGON3_CONFIG environment variable >
+    ./dragon3_config.yaml in the current directory. Returns None if none are
+    set/found, in which case ConfigManager falls back to packaged defaults
+    (which ship no site-specific paths; see config.example.yaml).
+    """
+    if cli_config:
+        return cli_config
+    env_config = os.environ.get("DRAGON3_CONFIG")
+    if env_config:
+        return env_config
+    if os.path.exists("dragon3_config.yaml"):
+        return "dragon3_config.yaml"
+    return None
+
 
 class SimulationPlotter:
     """模拟处理类，管理整个模拟处理流程"""
@@ -345,6 +367,9 @@ def _build_purge_parser() -> argparse.ArgumentParser:
         "--yes", action="store_true", help="Delete without interactive prompt after preview"
     )
     parser.add_argument("--list-targets", action="store_true", help="List supported purge targets")
+    parser.add_argument(
+        "--config", help="Path to user config YAML (" + _CONFIG_DISCOVERY_HELP + ")"
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser
 
@@ -359,6 +384,9 @@ def _build_analyze_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--force", action="store_true", help="Force a full rebuild of the feature store"
+    )
+    parser.add_argument(
+        "--config", help="Path to user config YAML (" + _CONFIG_DISCOVERY_HELP + ")"
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser
@@ -379,6 +407,9 @@ def _build_main_parser() -> argparse.ArgumentParser:
         metavar="VALUE",
         help="Start processing from N-body time VALUE, or use 'last' to resume from existing plots",
     )
+    parser.add_argument(
+        "--config", help="Path to user config YAML (" + _CONFIG_DISCOVERY_HELP + ")"
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     subparsers = parser.add_subparsers(
@@ -396,9 +427,15 @@ def _build_main_parser() -> argparse.ArgumentParser:
         "Examples:\n"
         "  python -m dragon3_pipelines\n"
         "  python -m dragon3_pipelines --skip-until=last\n"
+        "  python -m dragon3_pipelines --config configs/juwels_madnuc.yaml\n"
         "  python -m dragon3_pipelines help purge\n"
         "  python -m dragon3_pipelines purge --list-targets\n"
         "  python -m dragon3_pipelines analyze --simu 20sb\n"
+        "\n"
+        "No config source (--config / DRAGON3_CONFIG / ./dragon3_config.yaml) is\n"
+        "required for --help/help/purge --list-targets; the main pipeline and other\n"
+        "subcommands need paths.simulations/plot_dir/analysis_cache_dir configured\n"
+        "(see config.example.yaml).\n"
         "\n"
         "The installed script 'dragon3-plot' accepts the same arguments."
     )
@@ -458,7 +495,7 @@ def _main_purge(argv: list[str]) -> int:
     if not args.simu_name and not args.all_sims:
         parser.error("use --simu for one simulation or --all-sims for every configured prefix")
 
-    config = ConfigManager(opts=[])
+    config = ConfigManager(config_path=_resolve_config_path(args.config))
     purger = PlotPurger(config)
     simu_name = None if args.all_sims else args.simu_name
 
@@ -499,7 +536,7 @@ def _main_analyze(argv: list[str]) -> int:
     else:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
 
-    config = ConfigManager(opts=[])
+    config = ConfigManager(config_path=_resolve_config_path(args.config))
 
     if args.simu_name is not None and args.simu_name not in config.pathof:
         parser.error(f"Unknown simulation: {args.simu_name}")
@@ -536,7 +573,7 @@ def main(argv: list[str] | None = None) -> int:
         return _main_analyze(argv[1:])
 
     try:
-        long_options = ["skip-until=", "debug"]
+        long_options = ["skip-until=", "config=", "debug"]
         opts, args = getopt.getopt(argv, "k:", long_options)
         if args:
             print(f"Unexpected arguments: {' '.join(args)}")
@@ -545,12 +582,13 @@ def main(argv: list[str] | None = None) -> int:
             logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(name)s: %(message)s")
         else:
             logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
-        opts = _normalize_pipeline_opts(opts)
+        cli_config = dict(opts).get("--config")
+        opts = _normalize_pipeline_opts([(o, a) for o, a in opts if o != "--config"])
     except getopt.GetoptError as err:
         print(err)
         return 2
 
-    config = ConfigManager(opts=opts)
+    config = ConfigManager(config_path=_resolve_config_path(cli_config), opts=opts)
 
     # 初始化处理器
     plotter = SimulationPlotter(config)

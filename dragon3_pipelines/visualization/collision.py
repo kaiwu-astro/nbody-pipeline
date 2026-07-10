@@ -87,21 +87,28 @@ class CollCoalVisualizer(BaseContinousFileVisualizer):
                 fontstyle="italic",
             )
 
-        gwtc_df = load_GWTC_catalog()
-        y_err_lower_abs = np.abs(gwtc_df["mass_ratio_lower"])
-        y_err_upper_abs = gwtc_df["mass_ratio_upper"]
+        gwtc_catalog_csv = getattr(self.config, "gwtc_catalog_csv", None)
+        if gwtc_catalog_csv:
+            gwtc_df = load_GWTC_catalog(gwtc_catalog_csv)
+            y_err_lower_abs = np.abs(gwtc_df["mass_ratio_lower"])
+            y_err_upper_abs = gwtc_df["mass_ratio_upper"]
 
-        ax.errorbar(
-            x=gwtc_df["mass_1_source"],
-            y=gwtc_df["mass_ratio"],
-            yerr=[y_err_lower_abs, y_err_upper_abs],
-            fmt="o",
-            markersize=5,
-            capsize=3,
-            alpha=0.2,
-            color="gray",
-            label="GWTC Data",
-        )
+            ax.errorbar(
+                x=gwtc_df["mass_1_source"],
+                y=gwtc_df["mass_ratio"],
+                yerr=[y_err_lower_abs, y_err_upper_abs],
+                fmt="o",
+                markersize=5,
+                capsize=3,
+                alpha=0.2,
+                color="gray",
+                label="GWTC Data",
+            )
+        else:
+            logger.warning(
+                "paths.gwtc_catalog_csv not configured; skipping GWTC overlay "
+                "(see config.example.yaml)."
+            )
 
         ax.fill_betweenx(y=ax.get_ylim(), x1=40, x2=150, color="pink", alpha=0.2)
 

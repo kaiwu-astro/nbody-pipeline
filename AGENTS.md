@@ -97,7 +97,8 @@ target-version = "py311"
 ```
 
 ### 类型注解
-使用 **mypy** 进行类型检查：
+使用 **mypy** 进行类型检查（当前**未**接入 CI/pre-commit，属于 roadmap 项，避免一次性大规模类型修补跑题；
+新代码仍应遵守下述类型注解要求，为未来启用 mypy 做准备）：
 ```bash
 mypy dragon3_pipelines/
 ```
@@ -180,6 +181,24 @@ def process_data(
 - `python -m dragon3_pipelines --help` / `python -m dragon3_pipelines help`：查看顶层用法
 - `python -m dragon3_pipelines help purge`：查看 purge 子命令用法
 
+### 用户配置与路径可移植性
+
+包内 `config/default_config.yaml` **不**携带任何站点专属绝对路径——`paths.simulations`/`plot_dir`/
+`analysis_cache_dir` 默认为空。`ConfigManager` 在这些必需路径缺失时会在构造阶段抛出列出具体缺失
+key 的 `ValueError`（提示参考 `config.example.yaml`），而不是静默用某个开发者的个人路径。
+
+用户配置发现优先级（`main`/`purge`/`analyze` 三个 CLI 入口统一走 `dragon3_pipelines.__main__._resolve_config_path`）：
+1. `--config PATH` 命令行参数
+2. `DRAGON3_CONFIG` 环境变量
+3. 当前目录下的 `./dragon3_config.yaml`
+
+`--help`/`help`/`purge --list-targets` 不需要任何配置即可运行。仓库根目录的 `config.example.yaml`
+是完整注释模板；`configs/juwels_madnuc.yaml` 是 tracked 的 madnuc/JUWELS 真实站点配置（`export
+DRAGON3_CONFIG=configs/juwels_madnuc.yaml` 即可复现原有工作流)。可选的 `paths.teff_rgb_cache`
+（`BlackbodyColorConverter` 缓存，默认 `~/.cache/dragon3_pipelines/teff_to_rgb.pkl`）与
+`paths.gwtc_catalog_csv`（`load_GWTC_catalog` 输入，未配置时碰撞图跳过 GWTC 叠加并 log warning）
+也在该文件中有说明。
+
 ### 测试命令
 Agent Coding 完成代码修改后，必要测试流程是运行项目统一 CI 脚本：
 ```bash
@@ -217,6 +236,29 @@ pytest tests/test_config.py -v
 pip install pre-commit
 pre-commit install
 ```
+
+### 版本、CHANGELOG 与发布流程
+
+**版本号单一来源：**`dragon3_pipelines/__init__.py` 中的 `__version__` 是唯一来源。`pyproject.toml` 通过
+`dynamic = ["version"]` + `[tool.setuptools.dynamic]` 从该属性派生，不要在 `pyproject.toml` 里另外写死版本号。
+
+**CHANGELOG 维护规则：**`CHANGELOG.md` 采用 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 格式，
+手动维护（不自动生成）。**每次做出对用户可见的改动（新功能、行为变更、bug 修复、废弃/删除接口）后，
+必须在 `[Unreleased]` 段下按 Added/Changed/Fixed/Removed 分类补一行**，一句话说明改了什么、为什么。纯内部重构、
+测试、CI 配置等无用户可见影响的改动可以不写。
+
+**提交信息规范：**统一使用 [Conventional Commits](https://www.conventionalcommits.org/)前缀：
+`feat:`、`fix:`、`docs:`、`chore:`、`refactor:`（可按需扩展 `test:`、`perf:` 等）。
+
+**发布检查清单：**
+1. 在 `dragon3_pipelines/__init__.py` 中 bump `__version__`。
+2. 把 `CHANGELOG.md` 的 `[Unreleased]` 内容整理进一个新的 `[X.Y.Z] - YYYY-MM-DD` 小节。
+3. 同步更新 `CITATION.cff` 的 `version` 字段。
+4. 运行 `./scripts/release.sh X.Y.Z`（本地干跑用 `--no-push`）：脚本会检查工作树干净、
+   `__version__`/CHANGELOG/`CITATION.cff` 三处版本一致，刷新 `requirements.lock`，提交并打
+   annotated tag `vX.Y.Z`；push tag 与 `gh release create` 是脚本的显式最后一步，也是唯一的外发动作。
+5. **push tag 和 `gh release create` 属于外发（影响远程共享状态）的动作，执行前必须单独向用户确认**，
+   不要在未经确认的情况下直接跑不带 `--no-push` 的 `release.sh`。
 
 ### 修改文档
 在完成后，按需修改 `README.md` 和 `AGENTS.md` ，来更新对本项目的各种记述。注意这两个文档**不是**日志，不应该事无巨细的写入，而只记述对用户或 agent 必要的信息。
