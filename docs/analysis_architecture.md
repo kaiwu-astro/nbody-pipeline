@@ -1,0 +1,185 @@
+# Unified Analysis Architecture
+
+This document describes the target architecture for data reduction, caching, and
+querying in `dragon3_pipelines`, and the roadmap toward a future VO (Virtual
+Observatory) data release. It supersedes the historical "macroscopic scan /
+microscopic per-file plot" module split that used to be documented in
+`AGENTS.md`.
+
+## Why this document exists
+
+Two internal design discussions (`HDF5scan和Process重新设计.md`,
+`高频读取和VO兼容.md`) identified two compounding problems:
+
+1. **Architecture drift**: the "macro = hdf5_scan, micro = hdf5processor/plotter"
+   split was a historical accident, not an intentional module boundary. Several
+   tasks (`BTypeBinaryTask`, `BinaryStellarTypeTask`,
+   `IntermediateMassBlackHoleTask`) already emit per-object rows from inside the
+   scan framework, breaking that split in practice.
+2. **Query performance**: a single filtered query across a whole simulation via
+   the historical HDF5-loop-into-pandas path takes on the order of an hour. The
+   fix is a columnar Parquet analysis layer queried with DuckDB, backed by
+   small, purpose-built tables (e.g. compact objects, snapshot summaries)
+   rather than a full particle-level table for every query.
+3. **Future VO data release**: eventual TAP/ADQL/VOTable publication requires
+   SQL-safe, documented column names. Retrofitting internal column names like
+   `X [pc]` or `Ebind/kT` after the fact is expensive. New tables should be
+   VO-safe and schema-registered from day one.
+
+`HDF5ScanRunner` (`dragon3_pipelines/analysis/hdf5_scan.py`) is a mature asset —
+single-pass file reads, mtime-based incremental rebuilds, schema-version
+invalidation, checkpointing, and parallel execution, all covered by tests. It
+is promoted here to be the **one** analysis pipeline, not a "macro-only" tool.
+
+## Data layers
+
+| Layer | Location | Authority | Invalidation |
+| --- | --- | --- | --- |
+| **L0 - raw HDF5** | source `.h5part` files | authoritative, read-only | n/a |
+| **L1 - reader table cache** | `{path}.{table}.df.feather` next to the source file | derived, per-file | **existence-only** (known limitation, see Roadmap #1) |
+| **L2 - feature store** | `{analysis_cache_dir}/{simu}/{feature}/` | derived, per-feature | mtime of source files + `schema_version`; legacy features use feather+JSON meta, new features use Parquet+manifest (see PR 3) |
+| **L3 - release layer** | future `release/` build output | derived, publishable | rebuilt from L2 whenever `public: true` columns change |
+
+L1 is populated by `dragon3_pipelines/io/hdf5_reader.py::read_file` and is a
+pure per-file cache of the raw tables plus a fixed set of derived columns. L2
+is populated by `HDF5ScanTask` implementations via `HDF5ScanRunner`. L3 does
+not exist yet; it is scoped for a later roadmap item.
+
+## Task output-type taxonomy
+
+Every analysis task is an `HDF5ScanTask`, regardless of how much data it emits
+per snapshot. Output *cardinality* is not a module boundary, it is a
+property of the task's schema:
+
+- **`snapshot_scalar`**: one row (or a handful of rows) per snapshot/TTOT,
+  e.g. a time series of a global statistic. Typically cached with
+  `ParquetTableCacheMixin` or the legacy `FeatherMetaCacheMixin` (single
+  merged table in memory).
+- **`object_rows`**: many rows per snapshot, one per object of interest
+  (e.g. every compact object). Typically cached with
+  `ParquetDatasetCacheMixin` (one Parquet part per source file, never
+  merged into memory as a whole).
+- **`events`**: irregular, snapshot-independent records (mergers, escapes).
+  Roadmap only (see Roadmap #4); will reuse the `object_rows` dataset shape.
+- **`plot`**: a rendered figure rather than a data table. Roadmap only (see
+  Roadmap #3); today this remains the responsibility of
+  `SimulationPlotter.plot_hdf5_file`, which is frozen to its current set of
+  per-file visualizers.
+
+All four types are implemented as `HDF5ScanTask` and run through
+`HDF5ScanRunner`/`HDF5ScanSession`. There is no separate "microscopic" code
+path.
+
+## Normative policies
+
+- **Scan-task-only rule**: any new analysis/data-reduction feature that loops
+  over HDF5 files must be implemented as an `HDF5ScanTask` executed by
+  `HDF5ScanRunner`. Do not write a new ad hoc file-iteration loop. The
+  outer analysis class should subclass `ScanBackedAnalysisBase` and keep
+  `build_scan_job()` thin; extraction, merge, cache-path, and meta semantics
+  live in the task itself.
+- **`read_file` derived-column freeze**: the set of columns `read_file`
+  currently derives is frozen. Do not add new derived columns to the reader.
+  Heavy or science-specific derived quantities belong in a dedicated feature
+  task instead (see Roadmap #2 for why some existing derived columns need to
+  move out of the reader).
+- **`plot_hdf5_file` visualizer freeze**: do not add new visualizers to
+  `SimulationPlotter.plot_hdf5_file` until the plot-task registry (Roadmap #3)
+  exists.
+- **VO-safe naming for new persistent tables**: every new L2 feature table
+  uses `snake_case` column names matching `^[a-z][a-z0-9_]*$`, with a unit
+  suffix where applicable (`mass_msun`, `x_pc`). Existing internal column
+  names (e.g. `X [pc]`, `Ebind/kT`) are left as-is; this rule applies only to
+  new tables.
+- **Schema YAML required**: every new persistent L2 table must have a
+  corresponding schema definition in `dragon3_pipelines/schemas/` (see PR 2)
+  describing dtype, unit, UCD, description, and public/nullable flags for
+  each column.
+- **Cache layering discipline**: see the table above. Each layer has exactly
+  one writer path (the reader for L1, the owning `HDF5ScanTask` for L2) and a
+  documented invalidation rule. Do not read/write a layer's cache files from
+  outside its owning code path.
+
+## Query layer
+
+Query L2 feature tables with DuckDB over Parquet (`dragon3_pipelines/query.py`,
+see PR 5). Only pull small, final results into pandas, do not materialize a
+full feature table into memory when a query can be pushed down to DuckDB
+(column projection, `WHERE` filters). High-frequency/exploratory queries
+should target the small, purpose-built candidate tables (e.g.
+`compact_object_history`, `snapshot_summary`) rather than a full particle
+table.
+
+## Roadmap
+
+Not implemented in this round; listed here so future work has a documented,
+ordered plan. Items are loosely ordered by dependency.
+
+1. **Reader table cache versioning** (prerequisite for everything below):
+   `{path}.*.df.feather` is currently existence-only invalidated. Add a
+   version marker/sidecar so that changes to `read_file` output can properly
+   invalidate the L1 cache.
+2. **Reader slimming**: move NS/BH `L*`/`Teff*` clipping (currently in
+   `read_file`, which bakes display-only artificial values into the data
+   layer) into visualization code; audit `tau_gw`/`Ebind` and migrate them to
+   feature tasks if warranted. Depends on #1.
+3. **Plotter task registry**: introduce an `output_kind="plot"` scan task
+   type, seeded from the static `PlotTarget` registry pattern in
+   `visualization/purge.py`. Once it exists, `plot_hdf5_file` becomes legacy
+   and is frozen (this freeze is already policy as of this document).
+4. **Event tables**: `merger_events` (from the `mergers` table plus
+   coll.13/coal.24 lineage) and `escaper_events`, using the same
+   `ParquetDatasetCacheMixin` shape and a new schema YAML each. These unlock
+   an `is_bound`/escape flag for a future `compact_object_history` v2.
+5. **Full particle lake** (explicitly deferred by user decision this round):
+   revisit where Parquet parts get written (writing from worker processes is
+   safe too, since part paths are unique per source file) and whether
+   coordinates/velocities should be downcast to `float32`.
+6. **VO release export**: a `release/` builder that exports `public: true`
+   columns (per the schema registry) to VOTable via `astropy`; unit/UCD
+   metadata is already in place by this point.
+7. **TAP/DaCHS pilot**: stand up PostgreSQL + DaCHS in front of the release
+   tables.
+
+## Risks and mitigations
+
+1. **Parquet part model vs. the existing single-DataFrame merge protocol**:
+   resolved by the pass-through `cache_df` design in `ParquetDatasetCacheMixin`
+   (PR 3), `merge_file_result` writes a part file directly and returns the
+   `cache_df` unchanged; the runner gained one optional `prepare_full_rebuild`
+   hook so a Parquet dataset task can clear stale parts on a forced rebuild.
+2. **Worker to main-process pickle volume**: for late evolutionary stages with
+   many white dwarfs, per-file compact-object row counts can reach
+   10^5-10^6. Mitigation order: tight column projection (done from the
+   start), then downcast coordinates/velocities to `float32` if needed (schema
+   change), then escape hatch of writing the part directly inside
+   `process_file` in the worker and returning only
+   `{"part", "row_count", "file_meta"}` to the main process (part paths are
+   unique per source file, so there is no write collision). This escape
+   hatch is documented here but not implemented this round.
+3. **Concurrent scan invocations**: e.g. `analyze` and a nightly plotting run
+   touching the same simulation concurrently. This has the same exposure as
+   the existing feather cache today (atomic `os.replace` prevents corruption,
+   last-writer-wins). Policy: only run one scan per simulation at a time.
+   A lock file is out of scope for this round.
+4. **`simulation_id`**: for now this is the config key (e.g. `0sb`, `20sb`,
+   `60sb`). Schema descriptions note that a future `simulations` table will
+   formalize this at release time.
+5. **RG/VG units**: confirm against `GalacticOrbitVisualizer`'s axis labels
+   before finalizing the `snapshot_summary` schema's `_kpc` vs `_pc` column
+   suffix, this is a blocking item for that schema YAML.
+6. **Nullable `Int64` through Parquet**: round-trips correctly, but the
+   schema validator must treat pandas nullable `Int64` as part of the int
+   family. Covered by a dedicated dtype-compatibility test.
+7. **`pyproject.toml` flat `packages` list**: the wheel build already omits
+   subpackages today (`analysis/`, `io/`, etc. are not listed), this is a
+   pre-existing gap, not something introduced by this work. This round only
+   adds `dragon3_pipelines.schemas` to the package list and its YAML files to
+   package-data; fixing the rest of the subpackage list is out of scope. A
+   future switch to `packages.find` is recommended.
+
+## See also
+
+- [API Reference](api.md)
+- `dragon3_pipelines/analysis/hdf5_scan.py` - `HDF5ScanRunner`,
+  `HDF5ScanSession`, and the `HDF5ScanTask` protocol.

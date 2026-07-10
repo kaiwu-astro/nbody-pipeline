@@ -92,6 +92,7 @@ Utility functions for serialization, shell commands, logging, and color conversi
 ## Documentation
 
 - [API Reference](api.md) - Detailed API documentation
+- [Unified Analysis Architecture](analysis_architecture.md) - Data layering, scan task taxonomy, and the Parquet/DuckDB analysis layer
 - [Configuration Guide](../README.md#configuration) - How to configure the package
 - [Examples](../README.md#usage-examples) - Usage examples
 

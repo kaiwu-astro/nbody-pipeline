@@ -403,12 +403,13 @@ class DataProcessor:
 
 ### Analysis/Data Reduction 扫描约定
 
-HDF5 文件中的可绘图信息大体分为两类，维护时应先判断属于哪一类：
+完整架构说明见 [`docs/analysis_architecture.md`](docs/analysis_architecture.md)（英文）。核心结论：**输出 cardinality（每个 snapshot 产出一行还是多行）不是模块边界**，历史上"宏观=hdf5_scan、微观=hdf5processor/plotter"的两分法已被 `BTypeBinaryTask`、`BinaryStellarTypeTask`、`IntermediateMassBlackHoleTask` 等 per-object 输出的 scan task 打破，不再作为规范。
 
-- **微观信息（microscopic information）**：单个 snapshot 已包含大量对象级信息，例如某一时刻每颗恒星的状态。此类信息通常可以由单个 HDF5 file 生成一张图，应保留在 `SimulationPlotter.plot_hdf5_file` 调度的逐文件绘图流程中。
-- **宏观信息（macroscopic information）**：单个 snapshot 只贡献一个或少量统计点，例如需要画随时间演化的统计量。此类图需要遍历大量 HDF5 files 收集时间序列，应作为 analysis/data-reduction 扫描任务处理。
+所有 analysis/data-reduction 功能——无论是单点统计量（`snapshot_scalar`）、逐对象行（`object_rows`）、事件表（`events`，roadmap）——只要涉及"遍历 HDF5 文件抽取信息"，一律实现为 `HDF5ScanTask` 并通过 `HDF5ScanRunner` 执行。对应的外层 analysis class 应继承 `ScanBackedAnalysisBase`，实现很薄的 `build_scan_job()`；具体数据提取、merge、cache path、meta 语义仍放在独立 task 中。不要复制新的 HDF5 遍历循环，也不要把这类缓存写入逻辑塞进绘图主循环。
 
-未来凡是“遍历 HDF5 文件抽取小型信息”的 analysis/data-reduction 功能，优先实现为 `HDF5ScanTask` 并通过 `HDF5ScanRunner` 执行。对应的外层 analysis class 应继承 `ScanBackedAnalysisBase`，实现很薄的 `build_scan_job()`；具体数据提取、merge、cache path、meta 语义仍放在独立 task 中。不要复制新的 HDF5 遍历循环，也不要把这类缓存写入逻辑塞进绘图主循环；`SimulationPlotter.plot_hdf5_file` 应保持绘图调度职责。
+例外：单个 HDF5 file 生成一张图（`plot` 输出类型）这种逐文件绘图仍保留在 `SimulationPlotter.plot_hdf5_file` 调度流程中，且在 plot-task registry（见架构文档 roadmap）落地前**冻结新增绘图**，不再新增 visualizer 到该调度循环。
+
+新增持久化 L2 表（feature store）必须使用 VO 安全命名（`snake_case` + 单位后缀，如 `mass_msun`）并在 `dragon3_pipelines/schemas/` 下提供 schema YAML；已有内部列名（如 `X [pc]`）保持不变。
 
 所有 HDF5 文件选择、table cache、scan 并行和时间采样配置集中在全局 `hdf5` 配置节。feature 配置（如 `current_lagrangian`、`galactic_orbit`、`binary_stellar_type_extraction`）只保留 `enabled`、缓存文件名和绘图参数等专属字段。`hdf5.file_selection.sample_every_nb_time` 同时控制 scan 和主 HDF5 绘图；`None` 或 `<= 0` 表示不采样，正数表示保留从 `0.0` 开始落在该 NB 时间间隔倍数上的 snapshot。
 

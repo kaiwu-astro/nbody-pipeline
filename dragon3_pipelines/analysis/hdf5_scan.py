@@ -1,9 +1,14 @@
 """
-Shared HDF5 scanning utilities for analysis data reduction tasks.
+Unified analysis/data-reduction pipeline for HDF5 simulation snapshots.
 
-The plottable information contained in an HDF5 file can be broadly divided into two types:
-- Microscopic information: A single snapshot contains a large amount of information, such as the state of each star in that snapshot. For this type, each HDF5 file can generate one plot. This is implemented in SimulationPlotter.plot_hdf5_file.
-- Macroscopic information: For example, statistical information, where a single snapshot contains only one data point. To plot such an evolutionary diagram, it is necessary to loop through almost all HDF5 files in order to obtain a sequence of values. This is implemented in this module.
+This module is the one place that implements looping over HDF5 files to
+extract analysis output, regardless of whether a task emits one scalar per
+snapshot, many per-object rows per snapshot, or (in the future) event
+records. Output cardinality is not a module boundary; see
+docs/analysis_architecture.md for the full architecture, the task
+output-type taxonomy (snapshot_scalar / object_rows / events / plot), and
+caching layers. Per-file plotting (one HDF5 file -> one figure) remains the
+responsibility of SimulationPlotter.plot_hdf5_file.
 """
 
 from __future__ import annotations
