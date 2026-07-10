@@ -95,7 +95,17 @@ def ttot_sample_mask(
 
 
 class HDF5ScanTask(Protocol):
-    """Protocol implemented by small analysis reductions over HDF5 files."""
+    """Protocol implemented by small analysis reductions over HDF5 files.
+
+    Tasks may optionally define ``prepare_full_rebuild() -> None``. When
+    present, the runner calls it right before discarding cached state for a
+    forced/options-changed/schema-changed full rebuild. This is not part of
+    the Protocol's required signature (existing feather-backed tasks need
+    nothing here, since a full overwrite already handles it); it exists for
+    cache backends such as ``ParquetDatasetCacheMixin`` that must
+    synchronously clear on-disk state broader than one file, e.g. a
+    directory of Parquet parts.
+    """
 
     name: str
     required_tables: Sequence[str]
@@ -178,6 +188,9 @@ class HDF5ScanRunner:
             if options.force or options_changed or schema_changed:
                 cache_df = pd.DataFrame()
                 meta: Dict[str, Any] = {}
+                prepare_full_rebuild = getattr(task, "prepare_full_rebuild", None)
+                if prepare_full_rebuild is not None:
+                    prepare_full_rebuild()
             else:
                 cache_df = task.finalize_cache(task.read_cache())
             states[task.name] = {
