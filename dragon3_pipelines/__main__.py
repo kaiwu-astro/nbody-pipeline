@@ -28,12 +28,14 @@ from dragon3_pipelines.visualization import (
     PlotPurger,
 )
 from dragon3_pipelines.analysis import (
+    CompactObjectHistoryProcessor,
     CurrentMassLagrangianProcessor,
     GalacticEnergyAngularMomentumProcessor,
     GalacticOrbitProcessor,
     ParticleTracker,
+    SnapshotSummaryProcessor,
 )
-from dragon3_pipelines.analysis.hdf5_scan import ttot_matches_sample
+from dragon3_pipelines.analysis.hdf5_scan import HDF5ScanSession, ttot_matches_sample
 
 # Setup logger
 try:
@@ -59,6 +61,8 @@ class SimulationPlotter:
         self.galactic_energy_angular_momentum_processor = GalacticEnergyAngularMomentumProcessor(
             config_manager
         )
+        self.compact_object_history_processor = CompactObjectHistoryProcessor(config_manager)
+        self.snapshot_summary_processor = SnapshotSummaryProcessor(config_manager)
 
     def plot_hdf5_file(self, hdf5_file_path: str, simu_name: str) -> None:
         """处理单个HDF5文件（包含多个snapshot）
@@ -276,9 +280,26 @@ class SimulationPlotter:
         plt.close("all")
         gc.collect()
 
+    def update_analysis_store(self, simu_name: str) -> None:
+        """增量刷新 compact_object_history / snapshot_summary Parquet feature store
+
+        与 current_lagrangian/galactic_orbit 的按需刷新方式一致：受各自的
+        ``enabled`` 配置开关控制，非强制（增量）刷新。两个 task 共享同一个
+        HDF5ScanSession，因此仍然只需每个 HDF5 文件读取一次。
+        """
+        session = HDF5ScanSession(self.config)
+        if self.config.compact_object_history.get("enabled", True):
+            session.add_job(self.compact_object_history_processor.build_scan_job(simu_name))
+        if self.config.snapshot_summary.get("enabled", True):
+            session.add_job(self.snapshot_summary_processor.build_scan_job(simu_name))
+        if session.jobs:
+            session.run()
+
     def plot_all_simulations(self) -> None:
         """处理所有模拟"""
         for simu_name in self.config.pathof.keys():
+            # 保鲜 Parquet feature store（compact_object_history / snapshot_summary）
+            self.update_analysis_store(simu_name)
             # 先画lagr
             self.plot_lagr(simu_name)
             if self.config.current_lagrangian.get("enabled", True):
@@ -328,6 +349,21 @@ def _build_purge_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_analyze_parser() -> argparse.ArgumentParser:
+    """Build the analyze subcommand parser."""
+    parser = argparse.ArgumentParser(prog="python -m dragon3_pipelines analyze")
+    parser.add_argument(
+        "--simu",
+        dest="simu_name",
+        help="Limit analysis to one simulation (default: all configured)",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Force a full rebuild of the feature store"
+    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    return parser
+
+
 def _build_main_parser() -> argparse.ArgumentParser:
     """Build the top-level CLI help parser."""
     parser = argparse.ArgumentParser(
@@ -351,6 +387,9 @@ def _build_main_parser() -> argparse.ArgumentParser:
         dest="command",
     )
     subparsers.add_parser("purge", help="Preview or delete generated plot files")
+    subparsers.add_parser(
+        "analyze", help="Build/update the compact_object_history and snapshot_summary feature store"
+    )
     subparsers.add_parser("help", help="Show this help, or help for a command")
 
     parser.epilog = (
@@ -359,6 +398,7 @@ def _build_main_parser() -> argparse.ArgumentParser:
         "  python -m dragon3_pipelines --skip-until=last\n"
         "  python -m dragon3_pipelines help purge\n"
         "  python -m dragon3_pipelines purge --list-targets\n"
+        "  python -m dragon3_pipelines analyze --simu 20sb\n"
         "\n"
         "The installed script 'dragon3-plot' accepts the same arguments."
     )
@@ -372,6 +412,9 @@ def _print_help_topic(topic: str | None) -> int:
         return 0
     if topic == "purge":
         _build_purge_parser().print_help()
+        return 0
+    if topic == "analyze":
+        _build_analyze_parser().print_help()
         return 0
 
     print(f"Unknown help topic: {topic}")
@@ -443,6 +486,39 @@ def _main_purge(argv: list[str]) -> int:
     return 0
 
 
+def _main_analyze(argv: list[str]) -> int:
+    """Run the analyze CLI subcommand."""
+    if argv in (["-h"], ["--help"], ["help"]):
+        _build_analyze_parser().print_help()
+        return 0
+    parser = _build_analyze_parser()
+    args = parser.parse_args(argv)
+
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(name)s: %(message)s")
+    else:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
+
+    config = ConfigManager(opts=[])
+
+    if args.simu_name is not None and args.simu_name not in config.pathof:
+        parser.error(f"Unknown simulation: {args.simu_name}")
+    simu_names = [args.simu_name] if args.simu_name else list(config.pathof.keys())
+
+    compact_object_history_processor = CompactObjectHistoryProcessor(config)
+    snapshot_summary_processor = SnapshotSummaryProcessor(config)
+    session = HDF5ScanSession(config)
+    for simu_name in simu_names:
+        session.add_job(
+            compact_object_history_processor.build_scan_job(simu_name, force=args.force)
+        )
+        session.add_job(snapshot_summary_processor.build_scan_job(simu_name, force=args.force))
+    session.run()
+
+    print(f"Analyzed {len(simu_names)} simulation(s): {', '.join(simu_names)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main CLI entry point."""
     if argv is None:
@@ -456,6 +532,8 @@ def main(argv: list[str] | None = None) -> int:
         return _print_help_topic(argv[1] if len(argv) == 2 else None)
     if argv and argv[0] == "purge":
         return _main_purge(argv[1:])
+    if argv and argv[0] == "analyze":
+        return _main_analyze(argv[1:])
 
     try:
         long_options = ["skip-until=", "debug"]

@@ -1014,6 +1014,7 @@ class TestSimulationPlotterCurrentLagrangian:
             patch.object(
                 SimulationPlotter, "__init__", lambda self, cfg: setattr(self, "config", cfg)
             ),
+            patch.object(SimulationPlotter, "update_analysis_store") as update_analysis_store,
             patch.object(SimulationPlotter, "plot_lagr") as plot_lagr,
             patch.object(SimulationPlotter, "plot_current_mass_lagr") as plot_current,
             patch(
@@ -1025,6 +1026,7 @@ class TestSimulationPlotterCurrentLagrangian:
             plotter.hdf5_file_processor.get_all_hdf5_paths.return_value = []
             plotter.plot_all_simulations()
 
+        update_analysis_store.assert_called_once_with("test_simu")
         plot_lagr.assert_called_once_with("test_simu")
         plot_current.assert_called_once_with("test_simu")
 
@@ -1167,6 +1169,7 @@ class TestSimulationPlotterGalacticOrbit:
             patch.object(
                 SimulationPlotter, "__init__", lambda self, cfg: setattr(self, "config", cfg)
             ),
+            patch.object(SimulationPlotter, "update_analysis_store") as update_analysis_store,
             patch.object(SimulationPlotter, "plot_lagr") as plot_lagr,
             patch.object(SimulationPlotter, "plot_galactic_orbit") as plot_orbit,
             patch(
@@ -1178,6 +1181,7 @@ class TestSimulationPlotterGalacticOrbit:
             plotter.hdf5_file_processor.get_all_hdf5_paths.return_value = []
             plotter.plot_all_simulations()
 
+        update_analysis_store.assert_called_once_with("test_simu")
         plot_lagr.assert_called_once_with("test_simu")
         plot_orbit.assert_called_once_with("test_simu")
 
