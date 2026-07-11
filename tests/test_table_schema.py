@@ -7,7 +7,7 @@ import re
 import pandas as pd
 import pytest
 
-from dragon3_pipelines.schemas import (
+from nbody_pipeline.schemas import (
     SchemaValidationError,
     TableSchema,
     load_table_schema,
@@ -153,7 +153,7 @@ def test_schema_hash_is_stable() -> None:
 
 
 def test_schema_hash_changes_with_dtype() -> None:
-    from dragon3_pipelines.schemas import ColumnSchema, TableSchema
+    from nbody_pipeline.schemas import ColumnSchema, TableSchema
 
     base_column = ColumnSchema(
         name="mass_msun",

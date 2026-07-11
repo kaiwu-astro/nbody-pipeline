@@ -1,4 +1,4 @@
-"""Smoke tests for the `analyze` CLI subcommand wiring in dragon3_pipelines.__main__.
+"""Smoke tests for the `analyze` CLI subcommand wiring in nbody_pipeline.__main__.
 
 The two-task shared-read session behavior itself is already covered
 end-to-end by tests/test_pilot_tasks.py; these tests only exercise the CLI
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dragon3_pipelines import __main__ as main_module
+from nbody_pipeline import __main__ as main_module
 
 
 def _mock_config() -> MagicMock:

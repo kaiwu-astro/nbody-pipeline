@@ -1,5 +1,5 @@
 """
-Tests for dragon3_pipelines.utils module
+Tests for nbody_pipeline.utils module
 """
 
 import importlib.util
@@ -7,7 +7,7 @@ import logging
 
 import pytest
 
-from dragon3_pipelines.utils import save, read, get_output, can_convert_to_float, log_time
+from nbody_pipeline.utils import save, read, get_output, can_convert_to_float, log_time
 
 
 def _check_colour_available():
@@ -112,7 +112,7 @@ class TestColorConverter:
 
     def test_import_color_converter(self):
         """Test that BlackbodyColorConverter can be imported"""
-        from dragon3_pipelines.utils import BlackbodyColorConverter
+        from nbody_pipeline.utils import BlackbodyColorConverter
 
         assert BlackbodyColorConverter is not None
 
@@ -121,7 +121,7 @@ class TestColorConverter:
     )
     def test_color_converter_init(self, temp_dir):
         """Test BlackbodyColorConverter initialization"""
-        from dragon3_pipelines.utils import BlackbodyColorConverter
+        from nbody_pipeline.utils import BlackbodyColorConverter
 
         # Use temp directory for cache
         cache_path = temp_dir / "rgb_cache.pkl"

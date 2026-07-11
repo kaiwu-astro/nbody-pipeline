@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** project renamed from `dragon3_pipelines` to `nbody-pipeline`. The
+  import package is now `nbody_pipeline`, the installed CLI script is `nbody-plot`
+  (was `dragon3-plot`), the config discovery env var is `NBODY_CONFIG` (was
+  `DRAGON3_CONFIG`), the discovered config filename is `nbody_config.yaml` (was
+  `dragon3_config.yaml`), and the default user cache directory moved to
+  `~/.cache/nbody_pipeline/` (was `~/.cache/dragon3_pipelines/`).
+
 ### Added
 - `CHANGELOG.md`, `CITATION.cff`, `config.example.yaml`, and a tracked JUWELS/madnuc
   site config (`configs/juwels_madnuc.yaml`).
@@ -63,5 +71,5 @@ stable, documented package. Highlights:
   shared `./scripts/ci.sh` entry point, GitHub Actions CI, and pre-commit hooks
   (black, ruff).
 
-[Unreleased]: https://github.com/kaiwu-astro/dragon3_pipeline/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/kaiwu-astro/dragon3_pipeline/releases/tag/v1.0.0
+[Unreleased]: https://github.com/kaiwu-astro/nbody-pipeline/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/kaiwu-astro/nbody-pipeline/releases/tag/v1.0.0

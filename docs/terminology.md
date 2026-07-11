@@ -1,6 +1,6 @@
 # Terminology
 
-This document defines the key terminology used in the Dragon3 pipeline codebase to avoid confusion.
+This document defines the key terminology used in the nbody-pipeline codebase to avoid confusion.
 
 ## Snapshot vs HDF5 File
 
@@ -76,4 +76,4 @@ for hdf5_file in hdf5_files:                      # Iterate over HDF5 files
 
 ## Historical Note
 
-This terminology was standardized to resolve confusion where "snap" was sometimes used to refer to HDF5 files (because they are named snap.XXX.h5part in NBODY6++GPU output). 
+This terminology was standardized to resolve confusion where "snap" was sometimes used to refer to HDF5 files (because they are named snap.XXX.h5part in NBODY6++GPU output).

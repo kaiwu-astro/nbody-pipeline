@@ -11,17 +11,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from dragon3_pipelines.analysis.b_type_binary import BTypeBinaryExtractor
-from dragon3_pipelines.analysis.binary_stellar_type import BinaryStellarTypeExtractor
-from dragon3_pipelines.analysis.compact_binary_counter import CompactBinaryCounter
-from dragon3_pipelines.analysis.intermediate_mass_black_hole import (
+from nbody_pipeline.analysis.b_type_binary import BTypeBinaryExtractor
+from nbody_pipeline.analysis.binary_stellar_type import BinaryStellarTypeExtractor
+from nbody_pipeline.analysis.compact_binary_counter import CompactBinaryCounter
+from nbody_pipeline.analysis.intermediate_mass_black_hole import (
     IntermediateMassBlackHoleAnalyzer,
     MERGER_COLUMNS,
 )
-from dragon3_pipelines.analysis import hdf5_scan
-from dragon3_pipelines.analysis.initial_total_mass import InitialTotalMassAnalyzer
-from dragon3_pipelines.analysis.primordial_binary import PrimordialBinaryIdentifier
-from dragon3_pipelines.analysis.hdf5_scan import (
+from nbody_pipeline.analysis import hdf5_scan
+from nbody_pipeline.analysis.initial_total_mass import InitialTotalMassAnalyzer
+from nbody_pipeline.analysis.primordial_binary import PrimordialBinaryIdentifier
+from nbody_pipeline.analysis.hdf5_scan import (
     HDF5ScanJob,
     HDF5ScanOptions,
     HDF5ScanRunner,
@@ -29,7 +29,7 @@ from dragon3_pipelines.analysis.hdf5_scan import (
     ScanBackedAnalysisBase,
     hdf5_scan_options_from_config,
 )
-from dragon3_pipelines.io import HDF5FileProcessor
+from nbody_pipeline.io import HDF5FileProcessor
 
 
 def make_config(tmp_path: Path) -> Mock:
