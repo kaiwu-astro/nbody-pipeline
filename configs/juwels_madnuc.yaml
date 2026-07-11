@@ -10,18 +10,18 @@
 
 paths:
   simulations:
-    "0sb": "/p/scratch/madnuc/wu13/mar17-dragon3-start/00softBinary-5hardBinary"
-    "20sb": "/p/scratch/madnuc/wu13/mar17-dragon3-start/20softBinary-5hardBinary"
-    "60sb": "/p/scratch/madnuc/wu13/mar17-dragon3-start/60softBinary-5hardBinary"
+    "0sb": "/e/scratch/madnuc/wu13/mar17-dragon3-start/00softBinary-5hardBinary"
+    "20sb": "/e/scratch/madnuc/wu13/mar17-dragon3-start/20softBinary-5hardBinary"
+    "60sb": "/e/scratch/madnuc/wu13/mar17-dragon3-start/60softBinary-5hardBinary"
 
   input_files:
     "0sb": "N1m-Dragon3.inp.init"
     "20sb": "N1m-Dragon3.inp.init"
     "60sb": "N1m-Dragon3.inp.init"
 
-  plot_dir: "/p/home/jusers/wu13/juwels/scratch/plot"
+  plot_dir: "/e/scratch/madnuc/wu13/plot"
 
-  analysis_cache_dir: "/p/home/jusers/wu13/juwels/scratch/dragon3_intermediate_data_cache"
+  analysis_cache_dir: "/e/scratch/madnuc/wu13/dragon3_intermediate_data_cache"
 
 figure_prefixes:
   "0sb": "dragon3_1m_5hb_0sb_Apr2025"
