@@ -1,10 +1,10 @@
 # Site config for the madnuc group on JUWELS.
 #
 # Usage:
-#   export DRAGON3_CONFIG=/path/to/this/repo/configs/juwels_madnuc.yaml
-#   python -m dragon3_pipelines
+#   export NBODY_CONFIG=/path/to/this/repo/configs/juwels_madnuc.yaml
+#   python -m nbody_pipeline
 #
-# or copy/symlink it to ./dragon3_config.yaml at the repo root, or pass
+# or copy/symlink it to ./nbody_config.yaml at the repo root, or pass
 # --config configs/juwels_madnuc.yaml explicitly. See config.example.yaml for
 # a fully annotated template covering every available key.
 

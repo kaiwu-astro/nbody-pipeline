@@ -1,7 +1,7 @@
 # Unified Analysis Architecture
 
 This document describes the target architecture for data reduction, caching, and
-querying in `dragon3_pipelines`, and the roadmap toward a future VO (Virtual
+querying in `nbody_pipeline`, and the roadmap toward a future VO (Virtual
 Observatory) data release. It supersedes the historical "macroscopic scan /
 microscopic per-file plot" module split that used to be documented in
 `AGENTS.md`.
@@ -26,7 +26,7 @@ Two internal design discussions (`HDF5scan和Process重新设计.md`,
    `X [pc]` or `Ebind/kT` after the fact is expensive. New tables should be
    VO-safe and schema-registered from day one.
 
-`HDF5ScanRunner` (`dragon3_pipelines/analysis/hdf5_scan.py`) is a mature asset —
+`HDF5ScanRunner` (`nbody_pipeline/analysis/hdf5_scan.py`) is a mature asset —
 single-pass file reads, mtime-based incremental rebuilds, schema-version
 invalidation, checkpointing, and parallel execution, all covered by tests. It
 is promoted here to be the **one** analysis pipeline, not a "macro-only" tool.
@@ -40,7 +40,7 @@ is promoted here to be the **one** analysis pipeline, not a "macro-only" tool.
 | **L2 - feature store** | `{analysis_cache_dir}/{simu}/{feature}/` | derived, per-feature | mtime of source files + `schema_version`; legacy features use feather+JSON meta, new features use Parquet+manifest (see PR 3) |
 | **L3 - release layer** | future `release/` build output | derived, publishable | rebuilt from L2 whenever `public: true` columns change |
 
-L1 is populated by `dragon3_pipelines/io/hdf5_reader.py::read_file` and is a
+L1 is populated by `nbody_pipeline/io/hdf5_reader.py::read_file` and is a
 pure per-file cache of the raw tables plus a fixed set of derived columns. L2
 is populated by `HDF5ScanTask` implementations via `HDF5ScanRunner`. L3 does
 not exist yet; it is scoped for a later roadmap item.
@@ -92,7 +92,7 @@ path.
   names (e.g. `X [pc]`, `Ebind/kT`) are left as-is; this rule applies only to
   new tables.
 - **Schema YAML required**: every new persistent L2 table must have a
-  corresponding schema definition in `dragon3_pipelines/schemas/` (see PR 2)
+  corresponding schema definition in `nbody_pipeline/schemas/` (see PR 2)
   describing dtype, unit, UCD, description, and public/nullable flags for
   each column.
 - **Cache layering discipline**: see the table above. Each layer has exactly
@@ -102,7 +102,7 @@ path.
 
 ## Query layer
 
-Query L2 feature tables with DuckDB over Parquet (`dragon3_pipelines/query.py`,
+Query L2 feature tables with DuckDB over Parquet (`nbody_pipeline/query.py`,
 see PR 5). Only pull small, final results into pandas, do not materialize a
 full feature table into memory when a query can be pushed down to DuckDB
 (column projection, `WHERE` filters). High-frequency/exploratory queries
@@ -174,12 +174,12 @@ ordered plan. Items are loosely ordered by dependency.
 7. **`pyproject.toml` flat `packages` list**: the wheel build already omits
    subpackages today (`analysis/`, `io/`, etc. are not listed), this is a
    pre-existing gap, not something introduced by this work. This round only
-   adds `dragon3_pipelines.schemas` to the package list and its YAML files to
+   adds `nbody_pipeline.schemas` to the package list and its YAML files to
    package-data; fixing the rest of the subpackage list is out of scope. A
    future switch to `packages.find` is recommended.
 
 ## See also
 
 - [API Reference](api.md)
-- `dragon3_pipelines/analysis/hdf5_scan.py` - `HDF5ScanRunner`,
+- `nbody_pipeline/analysis/hdf5_scan.py` - `HDF5ScanRunner`,
   `HDF5ScanSession`, and the `HDF5ScanTask` protocol.

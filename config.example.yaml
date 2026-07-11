@@ -1,13 +1,13 @@
-# Dragon3 Pipelines - example user configuration.
+# nbody-pipeline - example user configuration.
 #
-# Copy this file, fill in your own paths, and point dragon3_pipelines at it:
+# Copy this file, fill in your own paths, and point nbody_pipeline at it:
 #   --config /path/to/your_config.yaml
-#   export DRAGON3_CONFIG=/path/to/your_config.yaml
-#   or place it at ./dragon3_config.yaml (repo root / current directory)
-# Priority: --config > DRAGON3_CONFIG > ./dragon3_config.yaml.
+#   export NBODY_CONFIG=/path/to/your_config.yaml
+#   or place it at ./nbody_config.yaml (repo root / current directory)
+# Priority: --config > NBODY_CONFIG > ./nbody_config.yaml.
 #
 # Only the sections below are merged into the packaged default config
-# (dragon3_pipelines/config/default_config.yaml). Physical constants,
+# (nbody_pipeline/config/default_config.yaml). Physical constants,
 # stellar-type tables, plot limits, and column labels are fixed science
 # defaults and are not user-overridable through this file; edit the package
 # default (or open a PR) if those genuinely need to change.
@@ -21,11 +21,11 @@ paths:
   simulations:
     my_sim: "/path/to/my_sim"
 
-  # Optional: input file (e.g. NBODY/Dragon3 .inp) relative to each
+  # Optional: input file (e.g. NBODY .inp) relative to each
   # simulation's directory above. Only needed for features that read the
   # initial input file (e.g. InitialTotalMassAnalyzer).
   input_files:
-    my_sim: "N1m-Dragon3.inp.init"
+    my_sim: "N1m.inp.init"
 
   # Required: where generated plots are written (jpg/, pdf, html, ...).
   plot_dir: "/path/to/plots"
@@ -36,7 +36,7 @@ paths:
 
   # Optional: override the cached blackbody-temperature-to-RGB interpolator
   # location used by CMD/color plots. Defaults to
-  # ~/.cache/dragon3_pipelines/teff_to_rgb.pkl if unset.
+  # ~/.cache/nbody_pipeline/teff_to_rgb.pkl if unset.
   # teff_rgb_cache: "/path/to/teff_to_rgb.pkl"
 
   # Optional: CSV path for the GWTC gravitational-wave catalog overlay used by

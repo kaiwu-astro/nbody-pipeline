@@ -7,20 +7,20 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from dragon3_pipelines.analysis.cache_paths import (
+from nbody_pipeline.analysis.cache_paths import (
     COMPACT_OBJECT_HISTORY_FEATURE,
     analysis_cache_dir,
 )
-from dragon3_pipelines.analysis.compact_object_history import (
+from nbody_pipeline.analysis.compact_object_history import (
     CompactObjectHistoryProcessor,
     CompactObjectHistoryTask,
 )
-from dragon3_pipelines.analysis.hdf5_scan import HDF5ScanOptions, HDF5ScanRunner, HDF5ScanSession
-from dragon3_pipelines.analysis.snapshot_summary import (
+from nbody_pipeline.analysis.hdf5_scan import HDF5ScanOptions, HDF5ScanRunner, HDF5ScanSession
+from nbody_pipeline.analysis.snapshot_summary import (
     SnapshotSummaryProcessor,
     SnapshotSummaryTask,
 )
-from dragon3_pipelines.schemas import load_table_schema
+from nbody_pipeline.schemas import load_table_schema
 from tests.test_hdf5_scan import FakeProcessor, make_config
 
 

@@ -1,0 +1,125 @@
+table: snapshot_summary
+version: 1
+description: One row per snapshot (TTOT), summarizing cluster-wide scalar quantities.
+columns:
+  - name: simulation_id
+    dtype: string
+    unit: null
+    ucd: meta.id
+    description: Simulation config key this row belongs to (e.g. "20sb").
+    public: true
+    nullable: false
+  - name: ttot
+    dtype: float64
+    unit: null
+    ucd: time.epoch
+    description: Simulation time in N-body units.
+    public: true
+    nullable: false
+  - name: time_myr
+    dtype: float64
+    unit: Myr
+    ucd: time.epoch
+    description: Simulation time in megayears.
+    public: true
+    nullable: false
+  - name: n_singles
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Number of single stars at this snapshot (scalars N_SINGLE).
+    public: true
+    nullable: false
+  - name: n_binaries
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Number of binaries at this snapshot (scalars N_BINARY).
+    public: true
+    nullable: false
+  - name: n_bh
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Number of black holes (KW=14) at this snapshot, counting singles and binary members.
+    public: true
+    nullable: false
+  - name: n_ns
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Number of neutron stars (KW=13) at this snapshot, counting singles and binary members.
+    public: true
+    nullable: false
+  - name: n_wd
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Number of white dwarfs (KW in 10-12) at this snapshot, counting singles and binary members.
+    public: true
+    nullable: false
+  - name: total_mass_msun
+    dtype: float64
+    unit: solMass
+    ucd: phys.mass
+    description: Total cluster mass at this snapshot.
+    public: true
+    nullable: false
+  - name: core_radius_pc
+    dtype: float64
+    unit: pc
+    ucd: phys.size.radius
+    description: Core radius in parsecs (scalars RC x RBAR).
+    public: true
+    nullable: false
+  - name: half_mass_radius_pc
+    dtype: float64
+    unit: pc
+    ucd: phys.size.radius
+    description: Half-mass radius in parsecs, computed from singles and binary members.
+    public: true
+    nullable: false
+  - name: rg_x_pc
+    # Unit confirmed pc (not kpc): nbody_pipeline/analysis/galactic_energy_angular_momentum.py
+    # documents "raw RG/VG are interpreted as pc/km/s" and adds RG directly to X [pc] positions.
+    dtype: float64
+    unit: pc
+    ucd: pos.cartesian.x
+    description: Galactocentric X position (scalars RG(1)).
+    public: true
+    nullable: false
+  - name: rg_y_pc
+    dtype: float64
+    unit: pc
+    ucd: pos.cartesian.y
+    description: Galactocentric Y position (scalars RG(2)).
+    public: true
+    nullable: false
+  - name: rg_z_pc
+    dtype: float64
+    unit: pc
+    ucd: pos.cartesian.z
+    description: Galactocentric Z position (scalars RG(3)).
+    public: true
+    nullable: false
+  - name: vg_x_kmps
+    dtype: float64
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.x
+    description: Galactocentric X velocity (scalars VG(1)).
+    public: true
+    nullable: false
+  - name: vg_y_kmps
+    dtype: float64
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.y
+    description: Galactocentric Y velocity (scalars VG(2)).
+    public: true
+    nullable: false
+  - name: vg_z_kmps
+    dtype: float64
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.z
+    description: Galactocentric Z velocity (scalars VG(3)).
+    public: true
+    nullable: false

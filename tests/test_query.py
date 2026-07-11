@@ -8,13 +8,13 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 
-from dragon3_pipelines.query import (
+from nbody_pipeline.query import (
     PARQUET_FEATURES,
     duckdb_connect,
     feature_dataset_glob,
     load_feature,
 )
-from dragon3_pipelines.schemas import TableSchema, load_table_schema
+from nbody_pipeline.schemas import TableSchema, load_table_schema
 
 
 def _row_dataframe(schema: TableSchema, values: dict) -> pd.DataFrame:

@@ -1,3 +1,3 @@
 """
-Test suite for dragon3_pipelines
+Test suite for nbody_pipeline
 """

@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dragon3_pipelines"
+name = "nbody-pipeline"
 dynamic = ["version"]
-description = "Pipelines for Dragon3 N-body simulation data analysis and visualization"
+description = "Pipelines for N-body simulation data analysis and visualization"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "Dragon3 Team"}
+    {name = "Kai Wu"}
 ]
 keywords = ["astronomy", "n-body", "simulation", "visualization"]
 classifiers = [
@@ -53,17 +53,17 @@ dev = [
 ]
 
 [project.scripts]
-dragon3-plot = "dragon3_pipelines.__main__:main"
+nbody-plot = "nbody_pipeline.__main__:main"
 
 [tool.setuptools]
-packages = ["dragon3_pipelines", "dragon3_pipelines.schemas"]
+packages = ["nbody_pipeline", "nbody_pipeline.schemas"]
 
 [tool.setuptools.dynamic]
-version = {attr = "dragon3_pipelines.__version__"}
+version = {attr = "nbody_pipeline.__version__"}
 
 [tool.setuptools.package-data]
-dragon3_pipelines = ["config/*.yaml"]
-"dragon3_pipelines.schemas" = ["*.yaml"]
+nbody_pipeline = ["config/*.yaml"]
+"nbody_pipeline.schemas" = ["*.yaml"]
 
 [tool.black]
 line-length = 100

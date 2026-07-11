@@ -1,15 +1,15 @@
-# Dragon3 Pipelines Documentation
+# nbody-pipeline Documentation
 
 ## Overview
 
-Dragon3 Pipelines is a modular Python package for analyzing and visualizing N-body simulation data from Dragon3 simulations. It provides a clean, type-annotated API for working with HDF5 files, tracking particles, and creating publication-quality visualizations.
+nbody-pipeline is a modular Python package for analyzing and visualizing N-body simulation data. It provides a clean, type-annotated API for working with HDF5 files, tracking particles, and creating publication-quality visualizations.
 
 ## Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/kaiwu-astro/dragon3_pipeline.git
-cd dragon3_pipeline
+git clone https://github.com/kaiwu-astro/nbody-pipeline.git
+cd nbody-pipeline
 
 # Install the package
 pip install -e .
@@ -24,29 +24,29 @@ pip install -e ".[dev]"
 
 ```bash
 # Show available commands and options
-python -m dragon3_pipelines --help
+python -m nbody_pipeline --help
 
 # Run analysis pipeline
-python -m dragon3_pipelines
+python -m nbody_pipeline
 
 # Resume from existing plots
-python -m dragon3_pipelines --skip-until=last
+python -m nbody_pipeline --skip-until=last
 
 # Show purge command help
-python -m dragon3_pipelines help purge
+python -m nbody_pipeline help purge
 
 # Generate movies
-bash dragon3_jpg_to_movie.sh
+bash nbody_jpg_to_movie.sh
 ```
 
 ### Python API
 
 ```python
-from dragon3_pipelines import SimulationPlotter
-from dragon3_pipelines.config import ConfigManager
-from dragon3_pipelines.io import HDF5FileProcessor
-from dragon3_pipelines.analysis import ParticleTracker
-from dragon3_pipelines.visualization import SingleStarVisualizer
+from nbody_pipeline import SimulationPlotter
+from nbody_pipeline.config import ConfigManager
+from nbody_pipeline.io import HDF5FileProcessor
+from nbody_pipeline.analysis import ParticleTracker
+from nbody_pipeline.visualization import SingleStarVisualizer
 
 # Load configuration
 config = ConfigManager()

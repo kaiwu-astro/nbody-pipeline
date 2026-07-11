@@ -1,5 +1,5 @@
 """
-Tests for dragon3_pipelines.visualization module
+Tests for nbody_pipeline.visualization module
 """
 
 from pathlib import Path
@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from dragon3_pipelines.visualization import (
+from nbody_pipeline.visualization import (
     BaseVisualizer,
     BaseHDF5Visualizer,
     HDF5Visualizer,
@@ -28,7 +28,7 @@ from dragon3_pipelines.visualization import (
 @pytest.fixture(autouse=True)
 def mock_color_converter():
     """Mock BlackbodyColorConverter for all tests"""
-    with patch("dragon3_pipelines.visualization.base.BlackbodyColorConverter") as mock:
+    with patch("nbody_pipeline.visualization.base.BlackbodyColorConverter") as mock:
         mock.return_value.get_rgb = Mock(return_value=np.array([[0.5, 0.5, 0.5]]))
         yield mock
 
@@ -446,7 +446,7 @@ class TestSingleStarVisualizer:
             saved_paths.append(Path(path))
 
         monkeypatch.setattr(
-            "dragon3_pipelines.visualization.single_star.sns.scatterplot", fake_scatterplot
+            "nbody_pipeline.visualization.single_star.sns.scatterplot", fake_scatterplot
         )
         monkeypatch.setattr(plt.Figure, "savefig", fake_savefig)
 
@@ -478,7 +478,7 @@ class TestSingleStarVisualizer:
             }
         )
         scatter = Mock()
-        monkeypatch.setattr("dragon3_pipelines.visualization.single_star.sns.scatterplot", scatter)
+        monkeypatch.setattr("nbody_pipeline.visualization.single_star.sns.scatterplot", scatter)
 
         vis.create_galactic_energy_angular_momentum_plot_jpg(df, "test_sim")
 
@@ -566,7 +566,7 @@ class TestLagrVisualizer:
         self, monkeypatch, mock_config, temp_dir
     ):
         """Each Lagrangian plot should be drawn on a fresh figure."""
-        import dragon3_pipelines.visualization.lagrangian as lagrangian_module
+        import nbody_pipeline.visualization.lagrangian as lagrangian_module
 
         mock_config.plot_dir = str(temp_dir)
         mock_config.close_figure_in_ipython = False
@@ -604,7 +604,7 @@ class TestLagrVisualizer:
         self, monkeypatch, mock_config, temp_dir
     ):
         """Total mass should be avmass * nshell for the 100% shell only."""
-        import dragon3_pipelines.visualization.lagrangian as lagrangian_module
+        import nbody_pipeline.visualization.lagrangian as lagrangian_module
 
         mock_config.plot_dir = str(temp_dir)
         mock_config.close_figure_in_ipython = False
@@ -681,7 +681,7 @@ class TestParticleHistoryVisualizer:
 
     def test_init(self, mock_config):
         """Test ParticleHistoryVisualizer initialization"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         vis = ParticleHistoryVisualizer(mock_config)
         assert vis.config == mock_config
@@ -690,7 +690,7 @@ class TestParticleHistoryVisualizer:
 
     def test_init_with_params(self, mock_config):
         """Test ParticleHistoryVisualizer initialization with simu_name and particle_name"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         vis = ParticleHistoryVisualizer(mock_config, simu_name="test_sim", particle_name=1000)
         assert vis.simu_name == "test_sim"
@@ -698,7 +698,7 @@ class TestParticleHistoryVisualizer:
 
     def test_filter_by_time_all(self, mock_config):
         """Test _filter_by_time with 'all' returns all rows"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         vis = ParticleHistoryVisualizer(mock_config)
         df = pd.DataFrame({"TTOT": [1.0, 2.0, 3.0, 4.0, 5.0]})
@@ -708,7 +708,7 @@ class TestParticleHistoryVisualizer:
 
     def test_filter_by_time_single_value(self, mock_config):
         """Test _filter_by_time with single float returns closest row"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         vis = ParticleHistoryVisualizer(mock_config)
         df = pd.DataFrame({"TTOT": [1.0, 2.0, 3.0, 4.0, 5.0]})
@@ -719,7 +719,7 @@ class TestParticleHistoryVisualizer:
 
     def test_filter_by_time_range(self, mock_config):
         """Test _filter_by_time with tuple range"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         vis = ParticleHistoryVisualizer(mock_config)
         df = pd.DataFrame({"TTOT": [1.0, 2.0, 3.0, 4.0, 5.0]})
@@ -730,7 +730,7 @@ class TestParticleHistoryVisualizer:
 
     def test_filter_by_time_empty_df(self, mock_config):
         """Test _filter_by_time with empty DataFrame"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         vis = ParticleHistoryVisualizer(mock_config)
         df = pd.DataFrame()
@@ -740,7 +740,7 @@ class TestParticleHistoryVisualizer:
 
     def test_get_marker_color_neutron_star(self, mock_config):
         """Test _get_marker_color returns red for neutron star"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         vis = ParticleHistoryVisualizer(mock_config)
         color = vis._get_marker_color(kw=13, teff=10000)
@@ -748,7 +748,7 @@ class TestParticleHistoryVisualizer:
 
     def test_get_marker_color_black_hole(self, mock_config):
         """Test _get_marker_color returns black for black hole"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         vis = ParticleHistoryVisualizer(mock_config)
         color = vis._get_marker_color(kw=14, teff=10000)
@@ -756,7 +756,7 @@ class TestParticleHistoryVisualizer:
 
     def test_get_marker_color_normal_star(self, mock_config):
         """Test _get_marker_color returns RGB tuple for normal star"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         vis = ParticleHistoryVisualizer(mock_config)
         color = vis._get_marker_color(kw=1, teff=5778)
@@ -769,7 +769,7 @@ class TestParticleHistoryVisualizer:
     @patch("matplotlib.pyplot.close")
     def test_plot_single_star(self, mock_close, mock_makedirs, mock_exists, mock_config, temp_dir):
         """Test plot method with single star data"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         mock_config.plot_dir = str(temp_dir)
         vis = ParticleHistoryVisualizer(mock_config, simu_name="test_sim", particle_name=1000)
@@ -803,7 +803,7 @@ class TestParticleHistoryVisualizer:
         self, mock_close, mock_makedirs, mock_exists, mock_config, temp_dir
     ):
         """Test plot method with binary system data"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         mock_config.plot_dir = str(temp_dir)
         vis = ParticleHistoryVisualizer(mock_config, simu_name="test_sim", particle_name=1000)
@@ -842,7 +842,7 @@ class TestParticleHistoryVisualizer:
 
     def test_plot_empty_df_returns_early(self, mock_config):
         """Test plot method returns early for empty DataFrame"""
-        from dragon3_pipelines.visualization import ParticleHistoryVisualizer
+        from nbody_pipeline.visualization import ParticleHistoryVisualizer
 
         vis = ParticleHistoryVisualizer(mock_config)
 
@@ -861,7 +861,7 @@ class TestPlotPurger:
     """Test HDF5 plot purge registry and deletion behavior."""
 
     def test_each_hdf5_method_target_matches_only_own_file(self, mock_config, tmp_path):
-        from dragon3_pipelines.visualization.purge import PLOT_TARGETS
+        from nbody_pipeline.visualization.purge import PLOT_TARGETS
 
         mock_config.plot_dir = str(tmp_path)
         mock_config.figname_prefix = {"sim_a": "a_"}
@@ -880,7 +880,7 @@ class TestPlotPurger:
             assert result.matched_paths == [expected.resolve()]
 
     def test_composite_targets_expand_to_expected_method_sets(self, mock_config, tmp_path):
-        from dragon3_pipelines.visualization.purge import (
+        from nbody_pipeline.visualization.purge import (
             BINARY_TARGETS,
             PLOT_TARGETS,
             SINGLE_TARGETS,
@@ -1049,7 +1049,7 @@ class TestPurgeCLI:
     """Test purge CLI behavior."""
 
     def test_cli_top_level_help(self, capsys):
-        from dragon3_pipelines.__main__ import main
+        from nbody_pipeline.__main__ import main
 
         assert main(["--help"]) == 0
         output = capsys.readouterr().out
@@ -1057,10 +1057,10 @@ class TestPurgeCLI:
         assert "--skip-until" in output
         assert "--debug" in output
         assert "purge" in output
-        assert "dragon3-plot" in output
+        assert "nbody-plot" in output
 
     def test_cli_help_verb(self, capsys):
-        from dragon3_pipelines.__main__ import main
+        from nbody_pipeline.__main__ import main
 
         assert main(["help"]) == 0
         output = capsys.readouterr().out
@@ -1068,7 +1068,7 @@ class TestPurgeCLI:
         assert "subcommands" in output
 
     def test_cli_help_purge(self, capsys):
-        from dragon3_pipelines.__main__ import main
+        from nbody_pipeline.__main__ import main
 
         assert main(["help", "purge"]) == 0
         output = capsys.readouterr().out
@@ -1076,7 +1076,7 @@ class TestPurgeCLI:
         assert "--dry-run" in output
 
     def test_cli_purge_help_flag_and_verb(self, capsys):
-        from dragon3_pipelines.__main__ import main
+        from nbody_pipeline.__main__ import main
 
         assert main(["purge", "--help"]) == 0
         output = capsys.readouterr().out
@@ -1089,14 +1089,14 @@ class TestPurgeCLI:
         assert "--dry-run" in output
 
     def test_cli_unknown_help_topic(self, capsys):
-        from dragon3_pipelines.__main__ import main
+        from nbody_pipeline.__main__ import main
 
         assert main(["help", "missing"]) == 2
         output = capsys.readouterr().out
         assert "Unknown help topic: missing" in output
 
     def test_cli_short_skip_until_normalized(self, monkeypatch):
-        import dragon3_pipelines.__main__ as main_module
+        import nbody_pipeline.__main__ as main_module
 
         captured = {}
 
@@ -1119,7 +1119,7 @@ class TestPurgeCLI:
         assert captured["ran"] is True
 
     def test_cli_list_targets(self, capsys):
-        from dragon3_pipelines.__main__ import main
+        from nbody_pipeline.__main__ import main
 
         assert main(["purge", "--list-targets"]) == 0
         output = capsys.readouterr().out
@@ -1127,7 +1127,7 @@ class TestPurgeCLI:
         assert "hdf5" in output
 
     def test_cli_dry_run(self, mock_config, tmp_path, monkeypatch, capsys):
-        import dragon3_pipelines.__main__ as main_module
+        import nbody_pipeline.__main__ as main_module
 
         mock_config.plot_dir = str(tmp_path)
         mock_config.figname_prefix = {"sim_a": "a_"}
@@ -1147,7 +1147,7 @@ class TestPurgeCLI:
         assert "x1_vs_x2.jpg" in output
 
     def test_cli_yes_deletes(self, mock_config, tmp_path, monkeypatch, capsys):
-        import dragon3_pipelines.__main__ as main_module
+        import nbody_pipeline.__main__ as main_module
 
         mock_config.plot_dir = str(tmp_path)
         mock_config.figname_prefix = {"sim_a": "a_"}

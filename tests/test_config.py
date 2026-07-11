@@ -1,12 +1,12 @@
 """
-Tests for dragon3_pipelines.config module
+Tests for nbody_pipeline.config module
 """
 
 import yaml
 import pytest
 
-from dragon3_pipelines.config import ConfigManager, load_config
-import dragon3_pipelines
+from nbody_pipeline.config import ConfigManager, load_config
+import nbody_pipeline
 
 
 @pytest.fixture
@@ -206,8 +206,8 @@ class TestConfigManager:
         with pytest.raises(ValueError, match="hdf5.file_selection.sample_every_nb_time"):
             ConfigManager(config_path=str(user_config_path))
 
-    def test_version_is_1_0_0(self):
-        assert dragon3_pipelines.__version__ == "1.0.0"
+    def test_version_is_0_10_0(self):
+        assert nbody_pipeline.__version__ == "0.10.0"
 
     def test_user_config_merge(self, temp_dir):
         """Test merging user configuration with defaults"""

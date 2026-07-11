@@ -9,17 +9,17 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from dragon3_pipelines.analysis.hdf5_scan import (
+from nbody_pipeline.analysis.hdf5_scan import (
     HDF5ScanOptions,
     HDF5ScanRunner,
     default_file_meta,
     replace_ttot_rows,
 )
-from dragon3_pipelines.analysis.parquet_cache import (
+from nbody_pipeline.analysis.parquet_cache import (
     ParquetDatasetCacheMixin,
     ParquetTableCacheMixin,
 )
-from dragon3_pipelines.schemas import ColumnSchema, SchemaValidationError, TableSchema
+from nbody_pipeline.schemas import ColumnSchema, SchemaValidationError, TableSchema
 from tests.test_hdf5_scan import FailingProcessor, FakeProcessor, FileBackedTask, make_config
 
 TEST_SCHEMA = TableSchema(
@@ -117,7 +117,7 @@ class FakeTableTask(ParquetTableCacheMixin):
         return self._cache_path
 
     def is_file_fresh(self, hdf5_path, meta, cache_df):
-        from dragon3_pipelines.analysis.hdf5_scan import file_is_fresh
+        from nbody_pipeline.analysis.hdf5_scan import file_is_fresh
 
         return file_is_fresh(hdf5_path, meta)
 

@@ -1,5 +1,5 @@
 """
-Shared pytest fixtures for dragon3_pipelines tests
+Shared pytest fixtures for nbody_pipeline tests
 """
 
 import pytest

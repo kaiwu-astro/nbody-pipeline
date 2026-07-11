@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from dragon3_pipelines.__main__ import SimulationPlotter
-from dragon3_pipelines.analysis import (
+from nbody_pipeline.__main__ import SimulationPlotter
+from nbody_pipeline.analysis import (
     CompactBinaryCounter,
     CurrentMassLagrangianProcessor,
     GalacticEnergyAngularMomentumProcessor,
@@ -16,7 +16,7 @@ from dragon3_pipelines.analysis import (
     ParticleTracker,
     tau_gw,
 )
-from dragon3_pipelines.analysis.galactic_energy_angular_momentum import (
+from nbody_pipeline.analysis.galactic_energy_angular_momentum import (
     E_GAL_COL,
     E_KIN_GAL_COL,
     E_POT_GAL_COL,
@@ -179,7 +179,7 @@ class TestParticleTracker:
         assert result["final_mass"] == 9.0
         assert result["stellar_types"] == [1, 2]
 
-    @patch("dragon3_pipelines.analysis.particle_tracker.glob")
+    @patch("nbody_pipeline.analysis.particle_tracker.glob")
     @patch("os.path.exists")
     def test_update_one_particle_history_df_no_cache(
         self, mock_exists, mock_glob, particle_tracker, mock_config
@@ -192,7 +192,7 @@ class TestParticleTracker:
 
         assert result.empty
 
-    @patch("dragon3_pipelines.analysis.particle_tracker.glob")
+    @patch("nbody_pipeline.analysis.particle_tracker.glob")
     @patch("pandas.read_feather")
     @patch("os.path.exists")
     def test_update_one_particle_history_df_with_cache(
@@ -390,7 +390,7 @@ class TestHDF5ParticleTask:
 
     def test_dataclass_creation(self):
         """Test HDF5ParticleTask dataclass can be created"""
-        from dragon3_pipelines.analysis.particle_tracker import HDF5ParticleTask
+        from nbody_pipeline.analysis.particle_tracker import HDF5ParticleTask
 
         task = HDF5ParticleTask(
             hdf5_file_path="/path/to/file.h5part",
@@ -469,7 +469,7 @@ class TestBinaryOrbitFunctions:
 
     def test_compute_binary_orbit_relative_positions_equal_masses(self):
         """Test compute_binary_orbit_relative_positions with equal masses"""
-        from dragon3_pipelines.analysis import compute_binary_orbit_relative_positions
+        from nbody_pipeline.analysis import compute_binary_orbit_relative_positions
 
         m1, m2 = 10.0, 10.0
         rel_x, rel_y, rel_z = 2.0, 0.0, 0.0
@@ -488,7 +488,7 @@ class TestBinaryOrbitFunctions:
 
     def test_compute_binary_orbit_relative_positions_unequal_masses(self):
         """Test compute_binary_orbit_relative_positions with unequal masses"""
-        from dragon3_pipelines.analysis import compute_binary_orbit_relative_positions
+        from nbody_pipeline.analysis import compute_binary_orbit_relative_positions
 
         m1, m2 = 30.0, 10.0  # 3:1 mass ratio
         rel_x, rel_y, rel_z = 4.0, 0.0, 0.0
@@ -504,7 +504,7 @@ class TestBinaryOrbitFunctions:
 
     def test_compute_binary_orbit_relative_positions_zero_mass(self):
         """Test compute_binary_orbit_relative_positions with zero total mass"""
-        from dragon3_pipelines.analysis import compute_binary_orbit_relative_positions
+        from nbody_pipeline.analysis import compute_binary_orbit_relative_positions
 
         m1, m2 = 0.0, 0.0
         rel_x, rel_y, rel_z = 2.0, 1.0, 0.5
@@ -519,7 +519,7 @@ class TestBinaryOrbitFunctions:
 
     def test_compute_individual_orbit_params_equal_masses(self):
         """Test compute_individual_orbit_params with equal masses"""
-        from dragon3_pipelines.analysis import compute_individual_orbit_params
+        from nbody_pipeline.analysis import compute_individual_orbit_params
 
         a_bin, ecc_bin = 10.0, 0.5
         m1, m2 = 10.0, 10.0
@@ -534,7 +534,7 @@ class TestBinaryOrbitFunctions:
 
     def test_compute_individual_orbit_params_unequal_masses(self):
         """Test compute_individual_orbit_params with unequal masses"""
-        from dragon3_pipelines.analysis import compute_individual_orbit_params
+        from nbody_pipeline.analysis import compute_individual_orbit_params
 
         a_bin, ecc_bin = 100.0, 0.3
         m1, m2 = 30.0, 10.0  # 3:1 mass ratio
@@ -550,7 +550,7 @@ class TestBinaryOrbitFunctions:
 
     def test_compute_individual_orbit_params_zero_mass(self):
         """Test compute_individual_orbit_params with zero total mass"""
-        from dragon3_pipelines.analysis import compute_individual_orbit_params
+        from nbody_pipeline.analysis import compute_individual_orbit_params
 
         a_bin, ecc_bin = 10.0, 0.5
         m1, m2 = 0.0, 0.0
@@ -761,7 +761,7 @@ class TestGalacticEnergyAngularMomentumProcessor:
         )
 
         with patch(
-            "dragon3_pipelines.analysis.galactic_energy_angular_momentum._evaluate_mw_potential",
+            "nbody_pipeline.analysis.galactic_energy_angular_momentum._evaluate_mw_potential",
             return_value=np.array([-100.0, -200.0]),
         ):
             result = processor.compute_snapshot(singles, scalar)
@@ -803,7 +803,7 @@ class TestGalacticEnergyAngularMomentumProcessor:
             return np.array([0.0])
 
         with patch(
-            "dragon3_pipelines.analysis.galactic_energy_angular_momentum._evaluate_mw_potential",
+            "nbody_pipeline.analysis.galactic_energy_angular_momentum._evaluate_mw_potential",
             side_effect=fake_potential,
         ):
             result = processor.compute_snapshot(singles, scalar)
@@ -814,7 +814,7 @@ class TestGalacticEnergyAngularMomentumProcessor:
         assert result[L_Z_GAL_COL].iloc[0] == pytest.approx(5.0 * (1.0 * 16.0 - 2.0 * 10.0))
 
     def test_mwpotential_info_log_only_once(self, caplog):
-        import dragon3_pipelines.analysis.galactic_energy_angular_momentum as module
+        import nbody_pipeline.analysis.galactic_energy_angular_momentum as module
 
         module._HAS_LOGGED_MW_POTENTIAL = False
         processor = GalacticEnergyAngularMomentumProcessor()
@@ -842,7 +842,7 @@ class TestGalacticEnergyAngularMomentumProcessor:
 
         with (
             patch(
-                "dragon3_pipelines.analysis.galactic_energy_angular_momentum._evaluate_mw_potential",
+                "nbody_pipeline.analysis.galactic_energy_angular_momentum._evaluate_mw_potential",
                 return_value=np.array([0.0]),
             ),
             caplog.at_level("INFO"),
@@ -1018,7 +1018,7 @@ class TestSimulationPlotterCurrentLagrangian:
             patch.object(SimulationPlotter, "plot_lagr") as plot_lagr,
             patch.object(SimulationPlotter, "plot_current_mass_lagr") as plot_current,
             patch(
-                "dragon3_pipelines.__main__.multiprocessing.get_context", return_value=FakeContext()
+                "nbody_pipeline.__main__.multiprocessing.get_context", return_value=FakeContext()
             ),
         ):
             plotter = SimulationPlotter(config)
@@ -1173,7 +1173,7 @@ class TestSimulationPlotterGalacticOrbit:
             patch.object(SimulationPlotter, "plot_lagr") as plot_lagr,
             patch.object(SimulationPlotter, "plot_galactic_orbit") as plot_orbit,
             patch(
-                "dragon3_pipelines.__main__.multiprocessing.get_context", return_value=FakeContext()
+                "nbody_pipeline.__main__.multiprocessing.get_context", return_value=FakeContext()
             ),
         ):
             plotter = SimulationPlotter(config)
@@ -1235,7 +1235,7 @@ class TestSimulationPlotterGalacticEnergyAngularMomentum:
     def test_plot_hdf5_file_calls_processor_and_visualizer_when_enabled(self):
         plotter, singles, scalar, path_exists = self._plotter(enabled=True)
 
-        with patch("dragon3_pipelines.__main__.os.path.exists", return_value=path_exists):
+        with patch("nbody_pipeline.__main__.os.path.exists", return_value=path_exists):
             plotter.plot_hdf5_file("/tmp/snap.40_1.0.h5part", "test_simu")
 
         plotter.galactic_energy_angular_momentum_processor.compute_snapshot.assert_called_once()
@@ -1247,7 +1247,7 @@ class TestSimulationPlotterGalacticEnergyAngularMomentum:
     def test_plot_hdf5_file_skips_when_disabled(self):
         plotter, _, _, path_exists = self._plotter(enabled=False)
 
-        with patch("dragon3_pipelines.__main__.os.path.exists", return_value=path_exists):
+        with patch("nbody_pipeline.__main__.os.path.exists", return_value=path_exists):
             plotter.plot_hdf5_file("/tmp/snap.40_1.0.h5part", "test_simu")
 
         plotter.galactic_energy_angular_momentum_processor.compute_snapshot.assert_not_called()
@@ -1256,7 +1256,7 @@ class TestSimulationPlotterGalacticEnergyAngularMomentum:
     def test_plot_hdf5_file_skips_compute_when_existing_jpg_is_reused(self):
         plotter, _, _, path_exists = self._plotter(skip_existing=True, path_exists=True)
 
-        with patch("dragon3_pipelines.__main__.os.path.exists", return_value=path_exists):
+        with patch("nbody_pipeline.__main__.os.path.exists", return_value=path_exists):
             plotter.plot_hdf5_file("/tmp/snap.40_1.0.h5part", "test_simu")
 
         plotter.galactic_energy_angular_momentum_processor.compute_snapshot.assert_not_called()

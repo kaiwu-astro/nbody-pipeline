@@ -15,4 +15,4 @@ export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
 
 python -m pytest tests/ -n auto --maxprocesses=8 --dist=loadfile -v \
-    --cov=dragon3_pipelines --cov-report=xml --cov-report=term
+    --cov=nbody_pipeline --cov-report=xml --cov-report=term

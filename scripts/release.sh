@@ -36,10 +36,10 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 echo "==> Checking __version__ was bumped to $VERSION"
-CURRENT_VERSION="$(python -c "import dragon3_pipelines; print(dragon3_pipelines.__version__)")"
+CURRENT_VERSION="$(python -c "import nbody_pipeline; print(nbody_pipeline.__version__)")"
 if [[ "$CURRENT_VERSION" != "$VERSION" ]]; then
-    echo "dragon3_pipelines.__version__ is '$CURRENT_VERSION', expected '$VERSION'." >&2
-    echo "Bump it in dragon3_pipelines/__init__.py before releasing." >&2
+    echo "nbody_pipeline.__version__ is '$CURRENT_VERSION', expected '$VERSION'." >&2
+    echo "Bump it in nbody_pipeline/__init__.py before releasing." >&2
     exit 1
 fi
 

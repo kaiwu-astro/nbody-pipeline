@@ -1,10 +1,10 @@
-"""Tests for dragon3_pipelines.io module"""
+"""Tests for nbody_pipeline.io module"""
 
 import pytest
 import pandas as pd
 from unittest.mock import Mock, patch
 
-from dragon3_pipelines.io import (
+from nbody_pipeline.io import (
     get_scale_dict_from_hdf5_df,
     read_bwdat,
     read_bdat,
@@ -374,11 +374,11 @@ class TestHDF5FileProcessor:
             patch.object(processor, "_cache_is_complete", return_value=False),
             patch.object(processor, "_write_df_dict_to_cache") as mock_write,
             patch(
-                "dragon3_pipelines.io.text_parsers.dataframes_from_hdf5_file",
+                "nbody_pipeline.io.text_parsers.dataframes_from_hdf5_file",
                 return_value=df_dict,
             ),
             patch(
-                "dragon3_pipelines.io.text_parsers.get_valueStr_of_namelist_key",
+                "nbody_pipeline.io.text_parsers.get_valueStr_of_namelist_key",
                 return_value="10",
             ),
         ):
@@ -442,7 +442,7 @@ class TestIntegration:
 
     def test_import_all_exports(self):
         """Test that all exports can be imported"""
-        from dragon3_pipelines.io import (
+        from nbody_pipeline.io import (
             HDF5FileProcessor,
             LagrFileProcessor,
             Coll13FileProcessor,

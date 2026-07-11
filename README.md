@@ -1,6 +1,6 @@
-# Dragon3 Pipelines - N-body Simulation Data Analysis
+# nbody-pipeline - N-body Simulation Data Analysis
 
-A modular Python package for analyzing and visualizing N-body simulation data from Dragon3 simulations.
+A modular Python package for analyzing and visualizing N-body simulation data.
 
 ## Installation
 
@@ -9,8 +9,8 @@ A modular Python package for analyzing and visualizing N-body simulation data fr
 Clone this repository and install the package:
 
 ```bash
-git clone https://github.com/kaiwu-astro/dragon3_pipeline.git
-cd dragon3_pipeline
+git clone https://github.com/kaiwu-astro/nbody-pipeline.git
+cd nbody-pipeline
 pip install -e .
 ```
 
@@ -48,36 +48,36 @@ pip install -r requirements.lock
 
 ```bash
 # Show available commands and options
-python -m dragon3_pipelines --help
+python -m nbody_pipeline --help
 
 # Run with default configuration
-python -m dragon3_pipelines
+python -m nbody_pipeline
 
 # Resume from existing plots
-python -m dragon3_pipelines --skip-until=last
+python -m nbody_pipeline --skip-until=last
 
 # Show purge command help
-python -m dragon3_pipelines help purge
+python -m nbody_pipeline help purge
 
 # Create movies from all preset plot patterns
-bash dragon3_pipelines/scripts/dragon3_jpg_to_movie.sh
+bash nbody_pipeline/scripts/nbody_jpg_to_movie.sh
 
 # Create movies for selected or custom plot patterns
-bash dragon3_pipelines/scripts/dragon3_jpg_to_movie.sh create _CMD.jpg _custom_suffix.jpg
+bash nbody_pipeline/scripts/nbody_jpg_to_movie.sh create _CMD.jpg _custom_suffix.jpg
 
 # Show movie command help and preset plot patterns
-bash dragon3_pipelines/scripts/dragon3_jpg_to_movie.sh --help
-bash dragon3_pipelines/scripts/dragon3_jpg_to_movie.sh create help
+bash nbody_pipeline/scripts/nbody_jpg_to_movie.sh --help
+bash nbody_pipeline/scripts/nbody_jpg_to_movie.sh create help
 ```
 
 ### Using as a Python Package
 
 ```python
-from dragon3_pipelines import main, SimulationPlotter
-from dragon3_pipelines.config import ConfigManager
-from dragon3_pipelines.io import HDF5FileProcessor
-from dragon3_pipelines.analysis import InitialTotalMassAnalyzer, ParticleTracker
-from dragon3_pipelines.visualization import SingleStarVisualizer
+from nbody_pipeline import main, SimulationPlotter
+from nbody_pipeline.config import ConfigManager
+from nbody_pipeline.io import HDF5FileProcessor
+from nbody_pipeline.analysis import InitialTotalMassAnalyzer, ParticleTracker
+from nbody_pipeline.visualization import SingleStarVisualizer
 
 # Create custom configuration
 config = ConfigManager(config_path="my_config.yaml")  # see Configuration below
@@ -92,7 +92,7 @@ initial_mass_msun = InitialTotalMassAnalyzer(config).get_initial_total_mass_msun
 
 ## Configuration
 
-The packaged default config (`dragon3_pipelines/config/default_config.yaml`) ships
+The packaged default config (`nbody_pipeline/config/default_config.yaml`) ships
 **no site-specific paths** — `paths.simulations`, `paths.plot_dir`, and
 `paths.analysis_cache_dir` are empty/`null` out of the box. Constructing a
 `ConfigManager` without a user config that fills these in raises a clear
@@ -106,11 +106,11 @@ Copy [`config.example.yaml`](config.example.yaml) (a fully annotated template) a
 fill in your paths, then point the CLI at it, in priority order:
 
 ```bash
-python -m dragon3_pipelines --config /path/to/my_config.yaml
+python -m nbody_pipeline --config /path/to/my_config.yaml
 # or
-export DRAGON3_CONFIG=/path/to/my_config.yaml
-python -m dragon3_pipelines
-# or drop it at ./dragon3_config.yaml in the current directory
+export NBODY_CONFIG=/path/to/my_config.yaml
+python -m nbody_pipeline
+# or drop it at ./nbody_config.yaml in the current directory
 ```
 
 `purge --list-targets` and `--help`/`help` work without any config. The main
@@ -120,20 +120,20 @@ pipeline and the `purge`/`analyze` subcommands need a config supplying at least
 madnuc/JUWELS users can use the tracked site config directly:
 
 ```bash
-export DRAGON3_CONFIG=configs/juwels_madnuc.yaml
+export NBODY_CONFIG=configs/juwels_madnuc.yaml
 ```
 
 ### Loading a Config in Code
 
 ```python
-from dragon3_pipelines.config import load_config
+from nbody_pipeline.config import load_config
 config = load_config("my_config.yaml")
 ```
 
 ## Package Structure
 
 ```
-dragon3_pipelines/
+nbody_pipeline/
 ├── config/          # Configuration management
 ├── io/              # Data I/O (HDF5, text files)
 ├── analysis/        # Particle tracking, physics calculations
@@ -156,8 +156,8 @@ dragon3_pipelines/
 ### Analyze HDF5 Files
 
 ```python
-from dragon3_pipelines.io import HDF5FileProcessor
-from dragon3_pipelines.config import ConfigManager
+from nbody_pipeline.io import HDF5FileProcessor
+from nbody_pipeline.config import ConfigManager
 
 config = ConfigManager(config_path="my_config.yaml")  # see Configuration below
 processor = HDF5FileProcessor(config)
@@ -168,8 +168,8 @@ df_dict = processor.read_file(hdf5_path="/path/to/file.h5part", simu_name="my_si
 ### Track Particles
 
 ```python
-from dragon3_pipelines.analysis import ParticleTracker
-from dragon3_pipelines.config import ConfigManager
+from nbody_pipeline.analysis import ParticleTracker
+from nbody_pipeline.config import ConfigManager
 
 config = ConfigManager(config_path="my_config.yaml")  # see Configuration below
 tracker = ParticleTracker(config)
@@ -179,8 +179,8 @@ particle_history = tracker.update_one_particle_history_df(simu_name="my_sim", pa
 ### Extract Binaries by Stellar Type
 
 ```python
-from dragon3_pipelines.analysis import BinaryStellarTypeExtractor
-from dragon3_pipelines.config import ConfigManager
+from nbody_pipeline.analysis import BinaryStellarTypeExtractor
+from nbody_pipeline.config import ConfigManager
 
 config = ConfigManager(config_path="my_config.yaml")  # see Configuration below
 extractor = BinaryStellarTypeExtractor(config)
@@ -193,7 +193,7 @@ The returned table contains the complete processed binary rows for every snapsho
 ### Analyze IMBH Candidates
 
 ```python
-from dragon3_pipelines.analysis import IntermediateMassBlackHoleAnalyzer
+from nbody_pipeline.analysis import IntermediateMassBlackHoleAnalyzer
 
 imbh = IntermediateMassBlackHoleAnalyzer(config)
 result = imbh.summarize_simulation("my_sim")
@@ -208,8 +208,8 @@ HDF5 data-reduction tasks for getting macroscopic data can be batched with `HDF5
 (here macroscopic data from HDF5 files means a few data points per HDF5 snapshot, such as center-of-mass info, largrangian data; in contract with many data points per snapshot such as X and V of all single stars)
 
 ```python
-from dragon3_pipelines.analysis import BTypeBinaryExtractor, BinaryStellarTypeExtractor
-from dragon3_pipelines.analysis.hdf5_scan import HDF5ScanSession
+from nbody_pipeline.analysis import BTypeBinaryExtractor, BinaryStellarTypeExtractor
+from nbody_pipeline.analysis.hdf5_scan import HDF5ScanSession
 
 session = HDF5ScanSession(config)
 session.add_job(BinaryStellarTypeExtractor(config).build_scan_job("my_sim", stellar_type="BH"))
@@ -220,8 +220,8 @@ results = session.run()
 ### Plot the Cluster Galactic Orbit
 
 ```python
-from dragon3_pipelines.analysis import GalacticOrbitProcessor
-from dragon3_pipelines.visualization import GalacticOrbitVisualizer
+from nbody_pipeline.analysis import GalacticOrbitProcessor
+from nbody_pipeline.visualization import GalacticOrbitVisualizer
 
 orbit_df = GalacticOrbitProcessor(config).load_plot_data("my_sim")
 viz = GalacticOrbitVisualizer(config)
@@ -234,8 +234,8 @@ This scan-backed analysis caches scalar snapshot rows under `galactic_orbit` and
 ### Plot Snapshot Galactic Energy vs Angular Momentum
 
 ```python
-from dragon3_pipelines.analysis import GalacticEnergyAngularMomentumProcessor
-from dragon3_pipelines.visualization import SingleStarVisualizer
+from nbody_pipeline.analysis import GalacticEnergyAngularMomentumProcessor
+from nbody_pipeline.visualization import SingleStarVisualizer
 
 plot_df = GalacticEnergyAngularMomentumProcessor(config).compute_snapshot(
     single_df_at_t,
@@ -249,8 +249,8 @@ The default HDF5 plotting flow creates `jpg/{prefix}output_ttot_{ttot}_galactic_
 ### Create Visualizations
 
 ```python
-from dragon3_pipelines.visualization import BinaryStarVisualizer
-from dragon3_pipelines.config import ConfigManager
+from nbody_pipeline.visualization import BinaryStarVisualizer
+from nbody_pipeline.config import ConfigManager
 
 config = ConfigManager(config_path="my_config.yaml")  # see Configuration below
 viz = BinaryStarVisualizer(config)
@@ -268,20 +268,20 @@ viz.create_mass_ratio_m1_plot_density(binary_df_at_t, simu_name="my_sim")
 - `--config=PATH`: Path to a user config YAML (see [Configuration](#configuration))
 - `--debug`: Enable debug logging
 
-The installed `dragon3-plot` script accepts the same arguments as `python -m dragon3_pipelines`.
+The installed `nbody-plot` script accepts the same arguments as `python -m nbody_pipeline`.
 
 ### Purge Generated Plots
 
 ```bash
 # List supported purge targets
-python -m dragon3_pipelines purge --list-targets
+python -m nbody_pipeline purge --list-targets
 
 # Preview matching files before deleting
-python -m dragon3_pipelines purge single.create_position_plot_jpg --simu sim_a --dry-run
-python -m dragon3_pipelines purge single.create_galactic_energy_angular_momentum_plot_jpg --simu sim_a --dry-run
+python -m nbody_pipeline purge single.create_position_plot_jpg --simu sim_a --dry-run
+python -m nbody_pipeline purge single.create_galactic_energy_angular_momentum_plot_jpg --simu sim_a --dry-run
 
 # Delete matching files without an interactive confirmation
-python -m dragon3_pipelines purge single.create_position_plot_jpg --simu sim_a --yes
+python -m nbody_pipeline purge single.create_position_plot_jpg --simu sim_a --yes
 ```
 
 ## Versioning & Changelog
@@ -289,7 +289,7 @@ python -m dragon3_pipelines purge single.create_position_plot_jpg --simu sim_a -
 This project follows [Semantic Versioning](https://semver.org/); `MAJOR.MINOR.PATCH`
 bumps track the API compatibility constraints in [`docs/api.md`](docs/api.md) (breaking
 changes to public methods/parameters/return structures bump `MAJOR`). The single
-source of truth for the current version is `dragon3_pipelines.__version__`.
+source of truth for the current version is `nbody_pipeline.__version__`.
 See [`CHANGELOG.md`](CHANGELOG.md) (Keep a Changelog format) for what changed in each
 release, and [`AGENTS.md`](AGENTS.md) for the release checklist and `scripts/release.sh`.
 
