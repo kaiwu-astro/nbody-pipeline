@@ -55,7 +55,7 @@ processing:
     my_sim: "last"
   skip_existing_plot: true
   close_figure_in_ipython: false
-  processes_count: 40
+  processes_count: 30
   tasks_per_child: 3
   mem_max_gb: 40.0
   inode_limit: 2000000
