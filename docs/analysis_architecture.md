@@ -212,6 +212,14 @@ ordered plan. Items are loosely ordered by dependency.
      empty file (every task's empty-tables path already produces a valid
      result) rather than aborting a multi-hour/multi-terabyte scan, and the
      file is still marked processed so it is not retried every run.
+   - `ParquetDatasetCacheMixin.write_part`'s tmp file is now named with a
+     per-call-unique suffix (`{pid}.{uuid4 hex}.tmp`), not just
+     `{part_name}.tmp`: under ~32-way concurrent writes into one `data/`
+     directory, the fixed tmp name occasionally raised a spurious
+     `FileNotFoundError` from `os.replace()` on this shared filesystem
+     (`old_run_archive` is itself a cross-filesystem symlink into the same
+     `/e/data1` mount the lake writes to). A unique tmp path removes any
+     dependency on that path being untouched by anything else.
 6. **VO release export**: a `release/` builder that exports `public: true`
    columns (per the schema registry) to VOTable via `astropy`; unit/UCD
    metadata is already in place by this point.

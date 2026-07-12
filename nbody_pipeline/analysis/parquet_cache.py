@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any, Dict
 
@@ -126,7 +127,13 @@ class ParquetDatasetCacheMixin:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         part_name = _part_filename(hdf5_path)
         part_path = self.data_dir / part_name
-        tmp_path = part_path.with_suffix(part_path.suffix + ".tmp")
+        # Per-call-unique tmp name (pid + random suffix), not just the final name +
+        # ".tmp": a fixed, predictable tmp path briefly produced spurious
+        # FileNotFoundError on os.replace() during the real full-archive build on
+        # this shared filesystem under ~32-way concurrent writes into one
+        # directory. A unique tmp path removes any dependency on that path being
+        # untouched by anything else, regardless of the exact root cause.
+        tmp_path = part_path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
         rows.to_parquet(tmp_path, index=False, **self.parquet_write_options)
         os.replace(tmp_path, part_path)
 

@@ -43,7 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (default off; on by default only for `ParticleLakeProcessor`) logs and skips
   genuinely corrupted HDF5 files (h5py `RuntimeError`/`OSError`, e.g. "wrong B-tree
   signature") instead of aborting the whole scan; `compact_object_history`/
-  `snapshot_summary` keep the original fail-fast-and-checkpoint behavior. See
+  `snapshot_summary` keep the original fail-fast-and-checkpoint behavior.
+  `ParquetDatasetCacheMixin.write_part` now writes to a per-call-unique tmp
+  filename (pid + random suffix) instead of a fixed, predictable one: under
+  ~32-way concurrent writes into one directory during the real full-archive
+  build, the fixed tmp name occasionally raised a spurious `FileNotFoundError`
+  from `os.replace()` on this shared filesystem. See
   `docs/analysis_architecture.md` Roadmap #5.
 - `HDF5FileProcessor.read_raw_tables` / `nbody_pipeline.io.text_parsers.raw_dataframes_from_hdf5_file`:
   an h5py-level raw HDF5 reader (column-projected, source dtypes preserved, no L1
