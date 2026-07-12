@@ -86,7 +86,9 @@ columns:
     ucd: meta.code.class
     description: >
       Binary classification (raw HDF5 Bin Label): 1 = regular KS-regularized binary, 0 =
-      wide/unperturbed binary, -1 = internal binary of a merger product.
+      wide/unperturbed binary, -1 = internal binary of a merger product, -9 = unknown
+      (source HDF5 file predates the "176 Bin Label"/"176 Bin cm Name" dataset -- all
+      other columns are unaffected, confirmed against real archived data).
     public: true
     nullable: false
   - name: mass_1_msun

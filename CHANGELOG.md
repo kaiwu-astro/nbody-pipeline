@@ -35,7 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`custom_output.F`) that KS-pair and wide-binary center-of-mass names use
   independent, numerically colliding schemes; use (`object_id_1`, `object_id_2`[,
   `object_id_3`]) as the per-snapshot unique key instead (also now the part-internal
-  sort key). See `docs/analysis_architecture.md` Roadmap #5.
+  sort key). Running the full three-simulation build surfaced two more real-archive
+  edge cases, both fixed: `snapshot_binaries.bin_label` now falls back to sentinel
+  `-9` ("unknown") for files that predate the `Bin Label`/`Bin cm Name` dataset
+  entirely (confirmed on `0sb`'s `old_run_archive/snap.40/`, 435 files, every other
+  `Bin *` column present), and a new `HDF5ScanOptions.skip_unreadable_files` option
+  (default off; on by default only for `ParticleLakeProcessor`) logs and skips
+  genuinely corrupted HDF5 files (h5py `RuntimeError`/`OSError`, e.g. "wrong B-tree
+  signature") instead of aborting the whole scan; `compact_object_history`/
+  `snapshot_summary` keep the original fail-fast-and-checkpoint behavior. See
+  `docs/analysis_architecture.md` Roadmap #5.
 - `HDF5FileProcessor.read_raw_tables` / `nbody_pipeline.io.text_parsers.raw_dataframes_from_hdf5_file`:
   an h5py-level raw HDF5 reader (column-projected, source dtypes preserved, no L1
   feather cache writes) for `HDF5ScanTask`s that declare `hdf5_reader_kind = "raw"`.

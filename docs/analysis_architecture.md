@@ -193,6 +193,25 @@ ordered plan. Items are loosely ordered by dependency.
    `analyze --features lake` run does not re-read every file's attrs.
    `snapshot_scalars` needs no such mechanism: its `ParquetTableCacheMixin`
    merge (`replace_ttot_rows`) already deduplicates by TTOT for free.
+
+   **Real-archive robustness** (found running the full three-simulation build
+   on madnuc's `0sb`/`20sb`/`60sb`): a year-plus archive of restarted jobs
+   contains files a clean synthetic test corpus would not. Two confirmed
+   cases and their fixes:
+   - Some archived files (`old_run_archive/snap.40/*.h5part` on `0sb`, 435
+     files) predate the `"176 Bin Label"`/`"176 Bin cm Name"` dataset
+     entirely -- every other `Bin *` column is present. `bin_label` falls
+     back to the sentinel `-9` ("unknown", documented in
+     `snapshot_binaries.yaml`) instead of `KeyError`-ing the file.
+   - A small number of files are genuinely corrupted at the HDF5 layer (e.g.
+     h5py `RuntimeError("Unable to get group info (wrong B-tree signature)")`
+     on a truncated/interrupted write). `HDF5ScanOptions.skip_unreadable_files`
+     (default `False`, so `compact_object_history`/`snapshot_summary` keep the
+     original fail-fast-and-checkpoint behavior) is set `True` by default only
+     for `ParticleLakeProcessor`: a read failure is logged and treated as an
+     empty file (every task's empty-tables path already produces a valid
+     result) rather than aborting a multi-hour/multi-terabyte scan, and the
+     file is still marked processed so it is not retried every run.
 6. **VO release export**: a `release/` builder that exports `public: true`
    columns (per the schema registry) to VOTable via `astropy`; unit/UCD
    metadata is already in place by this point.

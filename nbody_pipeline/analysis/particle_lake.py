@@ -56,6 +56,10 @@ LAKE_PARQUET_WRITE_OPTIONS: Dict[str, Any] = {
     "row_group_size": 1_000_000,
 }
 
+# Sentinel for snapshot_binaries.bin_label when the source HDF5 file predates
+# the "176 Bin Label"/"176 Bin cm Name" dataset (see SnapshotBinariesTask._build_rows).
+_BIN_LABEL_UNKNOWN = -9
+
 _SCALE_SCALAR_COLUMNS = [
     "TTOT",
     "RBAR",
@@ -191,6 +195,12 @@ class ParticleLakeProcessor(ScanBackedAnalysisBase):
     def _lake_scan_options(self, *, force: bool = False) -> HDF5ScanOptions:
         lake_config = getattr(self.config, "particle_lake", {}) or {}
         overrides = dict(lake_config.get("scan", {})) if isinstance(lake_config, dict) else {}
+        # A full-archive lake build spans years of restarted jobs and will hit the
+        # occasional corrupted/truncated file (see docs/analysis_architecture.md
+        # Roadmap #5) -- default to skipping those rather than aborting a
+        # multi-hour scan; config can still force strict fail-fast via
+        # particle_lake.scan.skip_unreadable_files: false.
+        overrides.setdefault("skip_unreadable_files", True)
         return self._scan_options(force=force, overrides=overrides)
 
     def _ttot_dedup_cache_path(self, simu_name: str) -> Path:
@@ -454,6 +464,14 @@ class SnapshotBinariesTask(ParquetDatasetCacheMixin):
         cm_x_pc = _rdens_corrected_pc(binaries["Bin cm X1"], ttot, rdens_pc["RDENS(1)"])
         cm_y_pc = _rdens_corrected_pc(binaries["Bin cm X2"], ttot, rdens_pc["RDENS(2)"])
         cm_z_pc = _rdens_corrected_pc(binaries["Bin cm X3"], ttot, rdens_pc["RDENS(3)"])
+        # Some archived files predate the "176 Bin Label"/"176 Bin cm Name" dataset
+        # (confirmed against real data: old_run_archive/snap.40/*.h5part has every
+        # other Bin* column but neither Bin Label name) -- fall back to the
+        # documented "unknown" sentinel instead of KeyError-ing the whole file.
+        if "Bin Label" in binaries.columns:
+            bin_label = _as_int32(binaries["Bin Label"])
+        else:
+            bin_label = np.full(len(binaries), _BIN_LABEL_UNKNOWN, dtype="int32")
 
         rows = pd.DataFrame(
             {
@@ -466,7 +484,7 @@ class SnapshotBinariesTask(ParquetDatasetCacheMixin):
                 "kw_1": _as_int32(binaries["Bin KW1"]),
                 "kw_2": _as_int32(binaries["Bin KW2"]),
                 "cm_kw": _as_int32(binaries["Bin cm KW"]),
-                "bin_label": _as_int32(binaries["Bin Label"]),
+                "bin_label": bin_label,
                 "mass_1_msun": _as_float32(binaries["Bin M1*"]),
                 "mass_2_msun": _as_float32(binaries["Bin M2*"]),
                 "cm_x_pc": cm_x_pc,
@@ -506,9 +524,9 @@ class SnapshotBinariesTask(ParquetDatasetCacheMixin):
         )
         # cm_id is not a reliable per-snapshot unique key (see its schema description);
         # sort by the confirmed-unique (object_id_1, object_id_2) pair instead.
-        rows = rows.sort_values(
-            ["ttot", "object_id_1", "object_id_2"], kind="stable"
-        ).reset_index(drop=True)
+        rows = rows.sort_values(["ttot", "object_id_1", "object_id_2"], kind="stable").reset_index(
+            drop=True
+        )
         return rows[list(self.table_schema.column_names())]
 
 

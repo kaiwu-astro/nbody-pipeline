@@ -695,6 +695,78 @@ def test_scan_runner_flushes_partial_checkpoint_on_exception(tmp_path: Path) -> 
     assert pd.read_feather(task.cache_path)["path"].tolist() == [paths[0]]
 
 
+class EmptyTolerantFileBackedTask(FileBackedTask):
+    """Models real production tasks (e.g. particle_lake's): missing/empty tables
+    in df_dict produce a valid empty result instead of KeyError-ing, and (like
+    FileBackedTask) persists cache/meta to disk so freshness carries across runs."""
+
+    def process_file(self, hdf5_path, df_dict, meta, cache_df):
+        scalars = df_dict.get("scalars", pd.DataFrame())
+        if scalars.empty:
+            rows = pd.DataFrame({"task": [], "path": []})
+        else:
+            rows = pd.DataFrame({"task": [self.name], "path": [hdf5_path]})
+        return {"rows": rows, "file_meta": hdf5_scan.default_file_meta(hdf5_path, df_dict)}
+
+
+def test_skip_unreadable_files_option_treats_read_failure_as_empty_result(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    paths = [str(tmp_path / f"snap.40_{idx}.h5part") for idx in range(3)]
+    for path in paths:
+        Path(path).write_text("fake")
+    tables = {
+        path: {
+            "scalars": pd.DataFrame({"TTOT": [float(idx)]}),
+            "binaries": pd.DataFrame({"TTOT": [float(idx)]}),
+        }
+        for idx, path in enumerate(paths)
+    }
+    task = EmptyTolerantFileBackedTask("lake_like", tmp_path / "task_cache")
+    processor = FailingProcessor(paths, tables, {paths[1]})
+    runner = HDF5ScanRunner(config, processor)
+
+    result = runner.run(
+        "sim",
+        [task],
+        HDF5ScanOptions(wait_age_hour=0, skip_unreadable_files=True),
+    )
+
+    assert result["lake_like"]["path"].tolist() == [paths[0], paths[2]]
+
+    # The unreadable file is still marked processed (empty ttot list) so a
+    # later run with a still-failing processor does not retry it.
+    resumed_task = EmptyTolerantFileBackedTask("lake_like", tmp_path / "task_cache")
+    resumed_processor = FailingProcessor(paths, tables, {paths[1]})
+    resumed_result = HDF5ScanRunner(config, resumed_processor).run(
+        "sim",
+        [resumed_task],
+        HDF5ScanOptions(wait_age_hour=0, skip_unreadable_files=True),
+    )
+    assert resumed_processor.read_paths == []  # nothing re-read: all 3 already "processed"
+    assert resumed_result["lake_like"]["path"].tolist() == [paths[0], paths[2]]
+
+
+def test_skip_unreadable_files_defaults_to_false_and_still_raises(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    paths = [str(tmp_path / f"snap.40_{idx}.h5part") for idx in range(2)]
+    for path in paths:
+        Path(path).write_text("fake")
+    tables = {
+        path: {
+            "scalars": pd.DataFrame({"TTOT": [float(idx)]}),
+            "binaries": pd.DataFrame({"TTOT": [float(idx)]}),
+        }
+        for idx, path in enumerate(paths)
+    }
+    task = EmptyTolerantFileBackedTask("strict", tmp_path / "task_cache2")
+    runner = HDF5ScanRunner(config, FailingProcessor(paths, tables, {paths[1]}))
+
+    with pytest.raises(RuntimeError, match="failed to read"):
+        runner.run("sim", [task], HDF5ScanOptions(wait_age_hour=0))
+
+
 def test_scan_runner_process_file_uses_initial_cache_view(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     paths = [str(tmp_path / f"snap.40_{idx}.h5part") for idx in range(2)]

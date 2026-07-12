@@ -43,6 +43,7 @@ class HDF5ScanOptions:
     force: bool = False
     incremental_from_cache_tail: bool = True
     checkpoint_every_files: int | None = 100
+    skip_unreadable_files: bool = False
 
 
 @dataclass(frozen=True)
@@ -348,20 +349,46 @@ class HDF5ScanRunner:
         required_tables = sorted({table for task in file_tasks for table in task.required_tables})
         columns_by_table = _merge_columns_by_table(file_tasks)
         reader_kind = _shared_hdf5_reader_kind(file_tasks, hdf5_path)
-        if reader_kind == "raw":
-            df_dict = self.hdf5_file_processor.read_raw_tables(
-                hdf5_path,
-                tables=required_tables,
-                columns_by_table=columns_by_table,
-            )
-        else:
-            df_dict = self.hdf5_file_processor.read_tables(
+
+        def _read() -> Dict[str, pd.DataFrame]:
+            if reader_kind == "raw":
+                return self.hdf5_file_processor.read_raw_tables(
+                    hdf5_path,
+                    tables=required_tables,
+                    columns_by_table=columns_by_table,
+                )
+            return self.hdf5_file_processor.read_tables(
                 hdf5_path,
                 simu_name,
                 tables=required_tables,
                 columns_by_table=columns_by_table,
                 use_cache=options.use_hdf5_cache,
             )
+
+        if options.skip_unreadable_files:
+            try:
+                df_dict = _read()
+            except Exception as exc:
+                # A real archive spanning years of restarted jobs will contain a few
+                # unreadable files (truncated writes, on-disk corruption -- e.g. h5py
+                # RuntimeError("Unable to get group info (wrong B-tree signature)")).
+                # One bad file must not abort a multi-hour/multi-terabyte scan: treat
+                # it as contributing zero rows (every task's empty-tables path
+                # already produces a valid, schema-typed empty result) and mark it
+                # processed so it isn't retried every run. Exceptions raised by our
+                # own processing logic (task.process_file below) are NOT caught here
+                # and still fail loudly. Opt-in via HDF5ScanOptions.skip_unreadable_files
+                # (only the particle lake enables this by default) -- other features keep
+                # the strict fail-fast-and-checkpoint behavior.
+                logger.warning(
+                    "Skipping unreadable HDF5 file %s: %s: %s",
+                    hdf5_path,
+                    type(exc).__name__,
+                    exc,
+                )
+                df_dict = {}
+        else:
+            df_dict = _read()
         df_dict = _filter_df_dict_by_sample(df_dict, options.sample_every_nb_time)
         task_results = {}
         for task in file_tasks:
@@ -582,7 +609,12 @@ def file_mtime(hdf5_path: str) -> float:
         return np.nan
 
 
-_NON_PERSISTED_SCAN_OPTION_KEYS = ("force", "checkpoint_every_files", "parallel")
+_NON_PERSISTED_SCAN_OPTION_KEYS = (
+    "force",
+    "checkpoint_every_files",
+    "parallel",
+    "skip_unreadable_files",
+)
 
 
 def persistent_scan_options(options: HDF5ScanOptions) -> Dict[str, Any]:

@@ -16,6 +16,7 @@ from nbody_pipeline.analysis.cache_paths import (
 )
 from nbody_pipeline.analysis.hdf5_scan import HDF5ScanOptions, HDF5ScanRunner
 from nbody_pipeline.analysis.particle_lake import (
+    _BIN_LABEL_UNKNOWN,
     ParticleLakeProcessor,
     SnapshotBinariesTask,
     SnapshotMergersTask,
@@ -224,6 +225,27 @@ def test_binaries_task_columns_and_rdens_correction(tmp_path: Path) -> None:
     assert row["kw_1"] == 13
     assert row["cm_x_pc"] == pytest.approx(6.0 - RDENS[0] * RBAR)
     assert row["semi_major_axis_au"] == pytest.approx(10.0)
+
+
+def test_binaries_task_missing_bin_label_column_uses_sentinel(tmp_path: Path) -> None:
+    """Real archived files predate the "176 Bin Label" dataset entirely (every other
+    Bin* column present) -- confirmed against old_run_archive/snap.40/*.h5part.
+    _build_rows must fall back to the documented sentinel, not KeyError.
+    """
+    config = make_config(tmp_path)
+    config.lake_dir_of = {"sim": str(tmp_path / "lake" / "sim")}
+    config.particle_lake = {"enabled": True, "scan": {}}
+    hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
+    Path(hdf5_path).write_text("fake")
+
+    binaries = _binaries_df(5.0).drop(columns=["Bin Label"])
+    task = SnapshotBinariesTask(config, "sim")
+    rows = task._build_rows(hdf5_path, {"scalars": _scalars_df(5.0), "binaries": binaries})
+
+    assert len(rows) == 1
+    assert rows.iloc[0]["bin_label"] == _BIN_LABEL_UNKNOWN
+    schema = load_table_schema("snapshot_binaries")
+    schema.validate_dataframe(rows[list(schema.column_names())])
 
 
 def test_mergers_task_columns(tmp_path: Path) -> None:
