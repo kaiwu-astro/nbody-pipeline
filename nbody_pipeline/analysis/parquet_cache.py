@@ -98,28 +98,72 @@ class ParquetDatasetCacheMixin:
             return False
         return (self.data_dir / part_name).exists()
 
-    def merge_file_result(
-        self, cache_df: pd.DataFrame, hdf5_path: str, result: Dict[str, Any]
-    ) -> pd.DataFrame:
-        """Validate and atomically write this file's part; cache_df passes through unchanged."""
-        rows: pd.DataFrame = result["rows"]
+    @property
+    def parquet_write_options(self) -> Dict[str, Any]:
+        """Extra kwargs passed to ``DataFrame.to_parquet`` when writing a part.
+
+        Override per-task, e.g. for ``compression="zstd"`` /
+        ``use_byte_stream_split`` / ``row_group_size`` on the large lake
+        tables. Empty by default, matching the previous unconditional
+        ``to_parquet(tmp_path, index=False)`` call.
+        """
+        return {}
+
+    def write_part(self, hdf5_path: str, rows: pd.DataFrame) -> Dict[str, Any]:
+        """Validate, atomically write ``rows`` as this file's Parquet part, return its file_meta.
+
+        Safe to call directly from inside a worker process's ``process_file``
+        (the escape hatch documented in docs/analysis_architecture.md Risks
+        #2): part paths are unique per source file
+        (``_part_filename(hdf5_path)``), so concurrent workers writing
+        different files' parts never collide. A task whose per-file row count
+        is too large to pickle back to the main process economically should
+        call this itself and return the ``{"part", "row_count", "ttot_min",
+        "ttot_max"}`` shape from ``process_file`` (see ``merge_file_result``'s
+        ``"part"`` branch) instead of returning the full ``rows`` DataFrame.
+        """
         self.table_schema.validate_dataframe(rows)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         part_name = _part_filename(hdf5_path)
         part_path = self.data_dir / part_name
         tmp_path = part_path.with_suffix(part_path.suffix + ".tmp")
-        rows.to_parquet(tmp_path, index=False)
+        rows.to_parquet(tmp_path, index=False, **self.parquet_write_options)
         os.replace(tmp_path, part_path)
 
         ttot_min = float(rows["ttot"].min()) if len(rows) and "ttot" in rows.columns else None
         ttot_max = float(rows["ttot"].max()) if len(rows) and "ttot" in rows.columns else None
-        result["file_meta"] = {
-            **result.get("file_meta", {}),
+        return {
             "part": part_name,
             "row_count": int(len(rows)),
             "ttot_min": ttot_min,
             "ttot_max": ttot_max,
         }
+
+    def merge_file_result(
+        self, cache_df: pd.DataFrame, hdf5_path: str, result: Dict[str, Any]
+    ) -> pd.DataFrame:
+        """Fold this file's part metadata into ``file_meta``; cache_df passes through unchanged.
+
+        Two shapes are accepted, dispatched on which key ``result`` has:
+
+        - ``"rows"``: the in-process shape (e.g. ``CompactObjectHistoryTask``)
+          -- ``process_file`` returned the full DataFrame, and this method
+          calls ``write_part`` on it here (in the main process).
+        - ``"part"``: the worker-direct-write shape -- ``process_file`` already
+          called ``write_part`` itself (typically inside a worker process) and
+          returned only the resulting part metadata; there is nothing left to
+          write here.
+        """
+        if "part" in result:
+            part_meta = {
+                "part": result["part"],
+                "row_count": result.get("row_count"),
+                "ttot_min": result.get("ttot_min"),
+                "ttot_max": result.get("ttot_max"),
+            }
+        else:
+            part_meta = self.write_part(hdf5_path, result["rows"])
+        result["file_meta"] = {**result.get("file_meta", {}), **part_meta}
         return cache_df
 
     def write_cache_and_meta(

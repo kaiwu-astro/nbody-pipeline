@@ -22,6 +22,10 @@ import pandas as pd
 
 from nbody_pipeline.analysis.cache_paths import (
     COMPACT_OBJECT_HISTORY_FEATURE,
+    SNAPSHOT_BINARIES_FEATURE,
+    SNAPSHOT_MERGERS_FEATURE,
+    SNAPSHOT_SCALARS_FEATURE,
+    SNAPSHOT_SINGLES_FEATURE,
     SNAPSHOT_SUMMARY_FEATURE,
     AnalysisCacheFeature,
     analysis_cache_dir,
@@ -33,6 +37,10 @@ logger = logging.getLogger(__name__)
 PARQUET_FEATURES: tuple[AnalysisCacheFeature, ...] = (
     COMPACT_OBJECT_HISTORY_FEATURE,
     SNAPSHOT_SUMMARY_FEATURE,
+    SNAPSHOT_SINGLES_FEATURE,
+    SNAPSHOT_BINARIES_FEATURE,
+    SNAPSHOT_MERGERS_FEATURE,
+    SNAPSHOT_SCALARS_FEATURE,
 )
 
 

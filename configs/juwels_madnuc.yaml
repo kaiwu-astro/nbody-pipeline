@@ -23,6 +23,8 @@ paths:
 
   analysis_cache_dir: "/e/scratch/madnuc/wu13/dragon3_intermediate_data_cache"
 
+  lake_dir: "/e/data1/hhd32/wu13/dragon3_particle_lake"
+
 figure_prefixes:
   "0sb": "dragon3_1m_5hb_0sb_Apr2025"
   "20sb": "dragon3_1m_5hb_20sb_Apr2025"
@@ -33,3 +35,10 @@ processing:
     "0sb": "last"
     "20sb": "last"
     "60sb": "last"
+
+particle_lake:
+  enabled: false            # nightly 不自动跑；仅 analyze --features lake 显式触发
+  scan:                     # 覆盖全局 hdf5 节 → HDF5ScanOptions
+    sample_every_nb_time: null
+    use_hdf5_cache: false   # 绝不在源目录（含 data1 归档）旁写 feather
+    checkpoint_every_files: 25

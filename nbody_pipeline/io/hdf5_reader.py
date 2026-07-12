@@ -99,6 +99,28 @@ class HDF5FileProcessor:
         )
         return {table: full_df_dict.get(table, pd.DataFrame()) for table in requested_tables}
 
+    def read_raw_tables(
+        self,
+        hdf5_path: str,
+        tables: Sequence[str],
+        columns_by_table: Optional[Mapping[str, Sequence[str] | None]] = None,
+    ) -> Dict[str, pd.DataFrame]:
+        """Read selected raw HDF5 tables with h5py-level column projection.
+
+        Thin wrapper around ``raw_dataframes_from_hdf5_file``: never reads or
+        writes the L1 feather cache (``{path}.{table}.df.feather``), and
+        applies none of ``read_file``'s derived columns or NS/BH display
+        clipping. For scan tasks that declare ``hdf5_reader_kind = "raw"``
+        (see ``nbody_pipeline.analysis.particle_lake``), which need the
+        original source values and cannot afford writing feather next to
+        multi-terabyte source/archive directories.
+        """
+        from nbody_pipeline.io.text_parsers import raw_dataframes_from_hdf5_file
+
+        return raw_dataframes_from_hdf5_file(
+            hdf5_path, tables=tables, columns_by_table=columns_by_table
+        )
+
     def _write_df_dict_to_cache(
         self, df_dict: Dict[str, pd.DataFrame], feather_path_of: Dict[str, str]
     ) -> None:

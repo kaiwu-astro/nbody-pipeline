@@ -1,0 +1,190 @@
+table: snapshot_singles
+version: 1
+description: >
+  Per-snapshot rows for every single star (one row per Name per TTOT), raw-value columns
+  only (no NS/BH display clipping, no force/force-derivative integrator state). See
+  docs/analysis_architecture.md Roadmap #5.
+columns:
+  - name: simulation_id
+    dtype: string
+    unit: null
+    ucd: meta.id
+    description: Simulation config key this row belongs to (e.g. "20sb").
+    public: true
+    nullable: false
+  - name: ttot
+    dtype: float64
+    unit: null
+    ucd: time.epoch
+    description: Simulation time in N-body units.
+    public: true
+    nullable: false
+  - name: time_myr
+    dtype: float64
+    unit: Myr
+    ucd: time.epoch
+    description: Simulation time in megayears.
+    public: true
+    nullable: false
+  - name: object_id
+    dtype: int64
+    unit: null
+    ucd: meta.id
+    description: Object identifier (raw HDF5 Name column).
+    public: true
+    nullable: false
+  - name: kw
+    dtype: int32
+    unit: null
+    ucd: src.class
+    description: Stellar type (Hurley KW code).
+    public: true
+    nullable: false
+  - name: type_code
+    dtype: int32
+    unit: null
+    ucd: meta.code.class
+    description: >
+      Member-label flag from the raw HDF5 Type column (0/-1/+1; confirmed against
+      NBODY6++GPU source as a member-label code, see custom_output_facility.F). Use
+      snapshot_binaries for authoritative binary-member data.
+    public: true
+    nullable: false
+  - name: mass_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: Object mass at this snapshot.
+    public: true
+    nullable: false
+  - name: x_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.x
+    description: >
+      X position. Density-center-corrected position in parsecs: raw HDF5 value minus
+      (RDENS x RBAR) from the same snapshot's scalars row (see snapshot_scalars.rdens_*_nb
+      and rbar_pc). Matches the sign/convention of the existing X [pc]/Bin cm X [pc]
+      derived columns in nbody_pipeline.io.hdf5_reader.
+    public: true
+    nullable: false
+  - name: y_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.y
+    description: >
+      Y position. Density-center-corrected position in parsecs: raw HDF5 value minus
+      (RDENS x RBAR) from the same snapshot's scalars row (see snapshot_scalars.rdens_*_nb
+      and rbar_pc). Matches the sign/convention of the existing X [pc]/Bin cm X [pc]
+      derived columns in nbody_pipeline.io.hdf5_reader.
+    public: true
+    nullable: false
+  - name: z_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.z
+    description: >
+      Z position. Density-center-corrected position in parsecs: raw HDF5 value minus
+      (RDENS x RBAR) from the same snapshot's scalars row (see snapshot_scalars.rdens_*_nb
+      and rbar_pc). Matches the sign/convention of the existing X [pc]/Bin cm X [pc]
+      derived columns in nbody_pipeline.io.hdf5_reader.
+    public: true
+    nullable: false
+  - name: vx_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.x
+    description: X velocity (raw HDF5 V1, already km/s).
+    public: true
+    nullable: false
+  - name: vy_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.y
+    description: Y velocity (raw HDF5 V2, already km/s).
+    public: true
+    nullable: false
+  - name: vz_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.z
+    description: Z velocity (raw HDF5 V3, already km/s).
+    public: true
+    nullable: false
+  - name: r_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.distance
+    description: Distance from the cluster density center, sqrt(x_pc^2+y_pc^2+z_pc^2).
+    public: true
+    nullable: false
+  - name: pot_nb
+    dtype: float32
+    unit: null
+    ucd: phys.energy
+    description: Gravitational potential at this object, in N-body units (raw HDF5 POT).
+    public: true
+    nullable: false
+  - name: radius_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: Stellar radius (raw HDF5 R*).
+    public: true
+    nullable: false
+  - name: luminosity_lsun
+    dtype: float32
+    unit: solLum
+    ucd: phys.luminosity
+    description: >
+      Stellar luminosity (raw HDF5 L*), the true simulation value with no display
+      clipping. For NS/BH (kw 13/14) this is a nominal/non-physical value assigned by the
+      stellar-evolution code, not an observable luminosity;
+      nbody_pipeline.io.hdf5_reader.read_file overwrites this with a display-only constant
+      for plotting, but this column keeps the untouched source value.
+    public: true
+    nullable: false
+  - name: teff_k
+    dtype: float32
+    unit: K
+    ucd: phys.temperature.effective
+    description: >
+      Effective temperature (raw HDF5 Teff*), the true simulation value with no display
+      clipping. Same NS/BH caveat as luminosity_lsun.
+    public: true
+    nullable: false
+  - name: core_radius_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: Stellar core radius (raw HDF5 RC*).
+    public: true
+    nullable: false
+  - name: core_mass_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: Stellar core mass (raw HDF5 MC*).
+    public: true
+    nullable: false
+  - name: spin_aspn
+    dtype: float32
+    unit: null
+    ucd: phys.angMomentum
+    description: Stellar spin parameter (raw HDF5 ASPN).
+    public: true
+    nullable: false
+  - name: epoch_myr
+    dtype: float32
+    unit: Myr
+    ucd: time.epoch
+    description: Stellar evolution epoch (raw HDF5 EPOCH).
+    public: true
+    nullable: false
+  - name: source_hdf5_path
+    dtype: string
+    unit: null
+    ucd: meta.ref.url
+    description: Absolute path of the source HDF5 file this row was derived from (provenance only).
+    public: false
+    nullable: false

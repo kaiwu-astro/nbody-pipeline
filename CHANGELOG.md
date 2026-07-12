@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.cache/nbody_pipeline/` (was `~/.cache/dragon3_pipelines/`).
 
 ### Added
+- Full snapshot particle lake (`nbody_pipeline.analysis.particle_lake`): four new
+  VO-safe Parquet feature tables -- `snapshot_singles`, `snapshot_binaries`,
+  `snapshot_mergers`, `snapshot_scalars` -- covering every snapshot (not just compact
+  objects) with raw, unclipped source values (no NS/BH display clipping, no
+  force/force-derivative integrator columns). Built via `python -m nbody_pipeline
+  analyze --features lake`; not run by the nightly `update_analysis_store` due to its
+  size. Requires an optional second storage root, `paths.lake_dir` (see
+  `config.example.yaml`); falls back to `analysis_cache_dir` when unset. New
+  `scripts/lake_preflight.py` read-only pre-flight check for duplicate/overlapping HDF5
+  files before a full-simulation rebuild. See `docs/analysis_architecture.md` Roadmap #5.
+- `HDF5FileProcessor.read_raw_tables` / `nbody_pipeline.io.text_parsers.raw_dataframes_from_hdf5_file`:
+  an h5py-level raw HDF5 reader (column-projected, source dtypes preserved, no L1
+  feather cache writes) for `HDF5ScanTask`s that declare `hdf5_reader_kind = "raw"`.
 - `CHANGELOG.md`, `CITATION.cff`, `config.example.yaml`, and a tracked JUWELS/madnuc
   site config (`configs/juwels_madnuc.yaml`).
 - `scripts/release.sh` release helper and a versioning/changelog workflow section in
@@ -38,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `README.md` permissions (was `600`, unreadable by other group members on the
   shared filesystem).
+- `HDF5ScanTask` Parquet/feather manifests no longer treat a `scan.parallel` mismatch
+  (e.g. a login-node pilot run followed by an sbatch run for the same
+  simulation/feature) as an "options changed" full rebuild -- previously this could
+  silently delete and reprocess an entire multi-terabyte Parquet dataset.
 
 ## [1.0.0] - 2026-07-10
 

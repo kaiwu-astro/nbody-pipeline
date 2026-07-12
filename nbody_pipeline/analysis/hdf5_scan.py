@@ -18,7 +18,7 @@ import logging
 import multiprocessing
 import os
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace as dataclasses_replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Protocol, Sequence
 
@@ -54,15 +54,23 @@ class HDF5ScanJob:
     options: HDF5ScanOptions
 
 
-def hdf5_scan_options_from_config(config: Any, *, force: bool = False) -> HDF5ScanOptions:
-    """Build scan options from the global ``hdf5`` configuration section."""
+def hdf5_scan_options_from_config(
+    config: Any, *, force: bool = False, overrides: Mapping[str, Any] | None = None
+) -> HDF5ScanOptions:
+    """Build scan options from the global ``hdf5`` configuration section.
+
+    ``overrides`` is applied last via ``dataclasses.replace``, for features
+    (e.g. ``particle_lake.scan``) that need to override a handful of fields
+    (``sample_every_nb_time``, ``use_hdf5_cache``, ``checkpoint_every_files``,
+    ...) on top of the global defaults without duplicating the whole section.
+    """
     hdf5_config = getattr(config, "hdf5", {}) or {}
     if not isinstance(hdf5_config, dict):
         hdf5_config = {}
     file_selection = hdf5_config.get("file_selection", {})
     table_cache = hdf5_config.get("table_cache", {})
     scan = hdf5_config.get("scan", {})
-    return HDF5ScanOptions(
+    options = HDF5ScanOptions(
         sample_every_nb_time=file_selection.get("sample_every_nb_time", 1.0),
         wait_age_hour=file_selection.get("wait_age_hour", 24),
         exclude_bad_dirname=file_selection.get("exclude_bad_dirname", True),
@@ -72,6 +80,9 @@ def hdf5_scan_options_from_config(config: Any, *, force: bool = False) -> HDF5Sc
         checkpoint_every_files=scan.get("checkpoint_every_files", 100),
         force=force,
     )
+    if overrides:
+        options = dataclasses_replace(options, **overrides)
+    return options
 
 
 def ttot_matches_sample(ttot: float, sample_every_nb_time: float | None) -> bool:
@@ -105,6 +116,14 @@ class HDF5ScanTask(Protocol):
     cache backends such as ``ParquetDatasetCacheMixin`` that must
     synchronously clear on-disk state broader than one file, e.g. a
     directory of Parquet parts.
+
+    Tasks may optionally define a class attribute ``hdf5_reader_kind``
+    (``"processed"`` (default) or ``"raw"``). ``"raw"`` routes the runner's
+    per-file table read through ``HDF5FileProcessor.read_raw_tables`` instead
+    of ``read_tables`` -- untouched source dtypes, no NS/BH display clipping,
+    never reads/writes the L1 feather cache. All tasks sharing one file read
+    (one ``HDF5ScanRunner.run()`` call) must declare the same
+    ``hdf5_reader_kind``; mixing raises.
     """
 
     name: str
@@ -178,6 +197,7 @@ class HDF5ScanRunner:
         for task in tasks:
             meta = task.read_meta()
             meta_options = meta.get("scan_options") if isinstance(meta, dict) else None
+            meta_options = normalize_persisted_scan_options(meta_options)
             options_changed = bool(meta) and meta_options != persistent_scan_options(options)
             schema_version = getattr(task, "schema_version", None)
             schema_changed = (
@@ -327,13 +347,21 @@ class HDF5ScanRunner:
     ) -> Dict[str, Any]:
         required_tables = sorted({table for task in file_tasks for table in task.required_tables})
         columns_by_table = _merge_columns_by_table(file_tasks)
-        df_dict = self.hdf5_file_processor.read_tables(
-            hdf5_path,
-            simu_name,
-            tables=required_tables,
-            columns_by_table=columns_by_table,
-            use_cache=options.use_hdf5_cache,
-        )
+        reader_kind = _shared_hdf5_reader_kind(file_tasks, hdf5_path)
+        if reader_kind == "raw":
+            df_dict = self.hdf5_file_processor.read_raw_tables(
+                hdf5_path,
+                tables=required_tables,
+                columns_by_table=columns_by_table,
+            )
+        else:
+            df_dict = self.hdf5_file_processor.read_tables(
+                hdf5_path,
+                simu_name,
+                tables=required_tables,
+                columns_by_table=columns_by_table,
+                use_cache=options.use_hdf5_cache,
+            )
         df_dict = _filter_df_dict_by_sample(df_dict, options.sample_every_nb_time)
         task_results = {}
         for task in file_tasks:
@@ -365,9 +393,11 @@ class ScanBackedAnalysisBase:
             return job.task.finalize_cache(job.task.read_cache())
         return self._run_scan_job(job)
 
-    def _scan_options(self, *, force: bool = False) -> HDF5ScanOptions:
+    def _scan_options(
+        self, *, force: bool = False, overrides: Mapping[str, Any] | None = None
+    ) -> HDF5ScanOptions:
         """Return global HDF5 scan options for this analysis."""
-        return hdf5_scan_options_from_config(self.config, force=force)
+        return hdf5_scan_options_from_config(self.config, force=force, overrides=overrides)
 
 
 def _run_file_tasks_worker(
@@ -410,6 +440,17 @@ def _merge_columns_by_table(
         table: None if table_columns is None else sorted(table_columns)
         for table, table_columns in columns.items()
     }
+
+
+def _shared_hdf5_reader_kind(file_tasks: Sequence[HDF5ScanTask], hdf5_path: str) -> str:
+    """Return the one ``hdf5_reader_kind`` shared by every task reading this file."""
+    kinds = {getattr(task, "hdf5_reader_kind", "processed") for task in file_tasks}
+    if len(kinds) > 1:
+        raise ValueError(
+            f"HDF5 scan tasks sharing one file read must use the same hdf5_reader_kind, "
+            f"got {sorted(kinds)} for {hdf5_path} (tasks: {[task.name for task in file_tasks]})"
+        )
+    return next(iter(kinds), "processed")
 
 
 def _filter_df_dict_by_sample(
@@ -541,12 +582,36 @@ def file_mtime(hdf5_path: str) -> float:
         return np.nan
 
 
+_NON_PERSISTED_SCAN_OPTION_KEYS = ("force", "checkpoint_every_files", "parallel")
+
+
 def persistent_scan_options(options: HDF5ScanOptions) -> Dict[str, Any]:
-    """Options persisted in metadata for cache compatibility checks."""
+    """Options persisted in metadata for cache compatibility checks.
+
+    ``parallel`` is excluded: it must never be able to trigger a full
+    rebuild just because a pilot run on the login node (``parallel=False``)
+    was followed by an sbatch run (``parallel=True``) for the same
+    simulation/feature -- that mismatch previously meant
+    ``prepare_full_rebuild()`` silently deleting a multi-TB Parquet dataset.
+    See docs/analysis_architecture.md Risks.
+    """
     values = asdict(options)
-    values.pop("force", None)
-    values.pop("checkpoint_every_files", None)
+    for key in _NON_PERSISTED_SCAN_OPTION_KEYS:
+        values.pop(key, None)
     return values
+
+
+def normalize_persisted_scan_options(meta_options: Any) -> Any:
+    """Strip non-persisted keys from an on-disk ``scan_options`` value before comparing.
+
+    Manifests written before ``parallel`` was excluded from
+    ``persistent_scan_options`` still have it on disk; without this
+    normalization, reading such a manifest would look like an options change
+    and force a one-time full rebuild of otherwise-fresh Parquet output.
+    """
+    if not isinstance(meta_options, dict):
+        return meta_options
+    return {k: v for k, v in meta_options.items() if k not in _NON_PERSISTED_SCAN_OPTION_KEYS}
 
 
 def _normalized_checkpoint_every_files(value: int | None) -> int | None:

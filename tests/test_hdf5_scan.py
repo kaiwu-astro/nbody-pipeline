@@ -393,6 +393,152 @@ def test_persistent_scan_options_ignore_checkpoint_frequency() -> None:
     assert "checkpoint_every_files" not in first
 
 
+def test_persistent_scan_options_ignore_parallel() -> None:
+    """A login-node pilot run (parallel=False) and an sbatch run (parallel=True) for the
+    same simulation/feature must compare equal, or the sbatch run silently deletes the
+    pilot's Parquet dataset via prepare_full_rebuild() on its first 'options changed'."""
+    serial = hdf5_scan.persistent_scan_options(HDF5ScanOptions(parallel=False))
+    parallel = hdf5_scan.persistent_scan_options(HDF5ScanOptions(parallel=True))
+
+    assert serial == parallel
+    assert "parallel" not in serial
+
+
+def test_normalize_persisted_scan_options_strips_legacy_parallel_key() -> None:
+    legacy_meta_options = {
+        "sample_every_nb_time": 1.0,
+        "wait_age_hour": 24,
+        "use_hdf5_cache": True,
+        "parallel": True,
+        "exclude_bad_dirname": True,
+        "incremental_from_cache_tail": True,
+    }
+
+    normalized = hdf5_scan.normalize_persisted_scan_options(legacy_meta_options)
+
+    assert "parallel" not in normalized
+    assert normalized == hdf5_scan.persistent_scan_options(HDF5ScanOptions())
+
+
+def test_normalize_persisted_scan_options_passes_through_non_dict() -> None:
+    assert hdf5_scan.normalize_persisted_scan_options(None) is None
+
+
+def test_legacy_manifest_with_parallel_key_does_not_trigger_full_rebuild(tmp_path: Path) -> None:
+    """Regression test for the exact scenario in docs/analysis_architecture.md Risks:
+    a manifest written before 'parallel' was excluded from persistent_scan_options must
+    not look like an options change (which would delete the whole Parquet dataset)."""
+    config = make_config(tmp_path)
+    hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
+    Path(hdf5_path).write_text("fake")
+    tables = {
+        hdf5_path: {
+            "scalars": pd.DataFrame({"TTOT": [1.0]}),
+            "binaries": pd.DataFrame({"TTOT": [1.0]}),
+        }
+    }
+    processor = FakeProcessor([hdf5_path], tables)
+    legacy_options = {
+        **hdf5_scan.persistent_scan_options(HDF5ScanOptions(wait_age_hour=0)),
+        "parallel": True,  # written by a pre-fix sbatch run
+    }
+    task = MetaTask(
+        "legacy_parallel",
+        {
+            "processed_files": {hdf5_path: {"mtime": Path(hdf5_path).stat().st_mtime}},
+            "scan_options": legacy_options,
+        },
+        pd.DataFrame({"old": [1, 2]}),
+    )
+    task.fresh_paths = {hdf5_path}  # already cached and unchanged -> should stay untouched
+    rebuild_calls = []
+    task.prepare_full_rebuild = lambda: rebuild_calls.append(True)
+    runner = HDF5ScanRunner(config, processor)
+
+    result = runner.run("sim", [task], HDF5ScanOptions(wait_age_hour=0, parallel=False))
+
+    assert rebuild_calls == []
+    assert processor.read_count == 0
+    # If options_changed had incorrectly fired, cache_df would have been reset to empty
+    # before the (skipped, since fresh) file could repopulate it.
+    assert result["legacy_parallel"]["old"].tolist() == [1, 2]
+
+
+def test_hdf5_scan_options_from_config_applies_overrides(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    config.hdf5["file_selection"]["sample_every_nb_time"] = 1.0
+
+    options = hdf5_scan_options_from_config(
+        config, overrides={"sample_every_nb_time": None, "use_hdf5_cache": False}
+    )
+
+    assert options.sample_every_nb_time is None
+    assert options.use_hdf5_cache is False
+    # Non-overridden fields still come from the global hdf5 config section.
+    assert options.wait_age_hour == 0
+
+
+def test_hdf5_scan_options_from_config_overrides_reject_unknown_field(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+
+    with pytest.raises(TypeError):
+        hdf5_scan_options_from_config(config, overrides={"not_a_real_field": True})
+
+
+class RawReaderTask(FakeTask):
+    hdf5_reader_kind = "raw"
+
+
+def test_mixed_hdf5_reader_kind_in_one_file_read_raises(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
+    Path(hdf5_path).write_text("fake")
+    tables = {
+        hdf5_path: {
+            "scalars": pd.DataFrame({"TTOT": [1.0]}),
+            "binaries": pd.DataFrame({"TTOT": [1.0]}),
+        }
+    }
+    processor = FakeProcessor([hdf5_path], tables)
+    runner = HDF5ScanRunner(config, processor)
+
+    with pytest.raises(ValueError, match="hdf5_reader_kind"):
+        runner.run(
+            "sim",
+            [FakeTask("processed"), RawReaderTask("raw")],
+            HDF5ScanOptions(wait_age_hour=0),
+        )
+
+
+def test_raw_hdf5_reader_kind_calls_read_raw_tables(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
+    Path(hdf5_path).write_text("fake")
+
+    class RawCapturingProcessor(FakeProcessor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.raw_calls = []
+
+        def read_raw_tables(self, hdf5_path, tables, columns_by_table=None):
+            self.raw_calls.append(hdf5_path)
+            return {table: self.tables_by_path[hdf5_path][table] for table in tables}
+
+    tables = {
+        hdf5_path: {
+            "scalars": pd.DataFrame({"TTOT": [1.0]}),
+            "binaries": pd.DataFrame({"TTOT": [1.0]}),
+        }
+    }
+    processor = RawCapturingProcessor([hdf5_path], tables)
+    runner = HDF5ScanRunner(config, processor)
+
+    runner.run("sim", [RawReaderTask("raw")], HDF5ScanOptions(wait_age_hour=0))
+
+    assert processor.raw_calls == [hdf5_path]
+    assert processor.read_count == 0
+
+
 def test_ttot_sample_mask_matches_scalar_sample_check() -> None:
     values = np.array([0.0, 1.0, 1.5, 2.0, np.nan])
 

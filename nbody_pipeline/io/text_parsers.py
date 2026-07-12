@@ -3,7 +3,7 @@
 import os
 import re
 from functools import lru_cache
-from typing import Dict, Optional, Union
+from typing import Dict, Mapping, Optional, Sequence, Union
 
 import h5py
 import numpy as np
@@ -12,6 +12,253 @@ import astropy.constants as constants
 from astropy.units.quantity import Quantity
 
 from nbody_pipeline.utils import get_output, can_convert_to_float
+
+# Dataset name lists shared by load_snapshot_data (processed reader) and
+# raw_dataframes_from_hdf5_file (raw reader, see particle_lake). Values are
+# the exact HDF5 dataset key strings ("<index> <label>"); the label after
+# the first space is the logical column name used in resulting DataFrames.
+SCALAR_KEYS = [
+    "TTOT",
+    "NPAIRS",
+    "RBAR",
+    "ZMBAR",
+    "N",
+    "TSTAR",
+    "RDENS(1)",
+    "RDENS(2)",
+    "RDENS(3)",
+    "TTOT/TCR0",
+    "TSCALE",
+    "VSTAR",
+    "RC",
+    "NC",
+    "VC",
+    "RHOM",
+    "CMAX",
+    "RSCALE",
+    "RSMIN",
+    "DMIN1",
+    "RG(1)",
+    "RG(2)",
+    "RG(3)",
+    "VG(1)",
+    "VG(2)",
+    "VG(3)",
+    "TIDAL(1)",
+    "TIDAL(2)",
+    "TIDAL(3)",
+    "TIDAL(4)",
+    "GMG",
+    "OMEGA",
+    "DISK",
+    "A",
+    "B",
+    "ZMET",
+    "ZPARS(1)",
+    "ZPARS(2)",
+    "ZPARS(3)",
+    "ZPARS(4)",
+    "ZPARS(5)",
+    "ZPARS(6)",
+    "ZPARS(7)",
+    "ZPARS(8)",
+    "ZPARS(9)",
+    "ZPARS(10)",
+    "ZPARS(11)",
+    "ZPARS(12)",
+    "ZPARS(13)",
+    "ZPARS(14)",
+    "ZPARS(15)",
+    "ZPARS(16)",
+    "ZPARS(17)",
+    "ZPARS(18)",
+    "ZPARS(19)",
+    "ZPARS(20)",
+    "ETAI",
+    "ETAR",
+    "ETAU",
+    "ECLOSE",
+    "DTMIN",
+    "RMIN",
+    "GMIN",
+    "GMAX",
+    "SMAX",
+    "NNBOPT",
+    "EPOCH0",
+    "N_SINGLE",
+    "N_BINARY",
+    "N_MERGER",
+]
+
+SINGLE_COLS = [
+    "001 X1",
+    "002 X2",
+    "003 X3",
+    "004 V1",
+    "005 V2",
+    "006 V3",
+    "007 A1",
+    "008 A2",
+    "009 A3",
+    "010 AD1",
+    "011 AD2",
+    "012 AD3",
+    "013 D21",
+    "014 D22",
+    "015 D23",
+    "016 D31",
+    "017 D32",
+    "018 D33",
+    "019 STEP",
+    "020 STEPR",
+    "021 T0",
+    "022 T0R",
+    "023 M",
+    "024 NB-Sph",
+    "025 POT",
+    "026 R*",
+    "027 L*",
+    "028 Teff*",
+    "029 RC*",
+    "030 MC*",
+    "031 KW",
+    "032 Name",
+    "033 Type",
+    "035 ASPN",
+    "036 TEV",
+    "037 TEV0",
+    "038 EPOCH",
+]
+
+BINARY_COLS = [
+    "101 Bin cm X1",
+    "102 Bin cm X2",
+    "103 Bin cm X3",
+    "104 Bin cm V1",
+    "105 Bin cm V2",
+    "106 Bin cm V3",
+    "107 Bin cm A1",
+    "108 Bin cm A2",
+    "109 Bin cm A3",
+    "110 Bin cm AD1",
+    "111 Bin cm AD2",
+    "112 Bin cm AD3",
+    "113 Bin cm D21",
+    "114 Bin cm D22",
+    "115 Bin cm D23",
+    "116 Bin cm D31",
+    "117 Bin cm D32",
+    "118 Bin cm D33",
+    "119 Bin cm STEP",
+    "120 Bin cm STEPR",
+    "121 Bin cm T0",
+    "122 Bin cm T0R",
+    "123 Bin M1*",
+    "124 Bin M2*",
+    "125 Bin rel X1",
+    "126 Bin rel X2",
+    "127 Bin rel X3",
+    "128 Bin rel V1",
+    "129 Bin rel V2",
+    "130 Bin rel V3",
+    "131 Bin rel A1",
+    "132 Bin rel A2",
+    "133 Bin rel A3",
+    "134 Bin rel AD1",
+    "135 Bin rel AD2",
+    "136 Bin rel AD3",
+    "137 Bin rel D21",
+    "138 Bin rel D22",
+    "139 Bin rel D23",
+    "140 Bin rel D31",
+    "141 Bin rel D32",
+    "142 Bin rel D33",
+    "143 Bin POT",
+    "144 Bin RS1*",
+    "145 Bin L1*",
+    "146 Bin Teff1*",
+    "147 Bin RS2*",
+    "148 Bin L2*",
+    "149 Bin Teff2*",
+    "150 Bin RC1*",
+    "151 Bin MC1*",
+    "152 Bin RC2*",
+    "153 Bin MC2*",
+    "154 Bin A[au]",
+    "155 Bin ECC",
+    "156 Bin P[d]",
+    "157 Bin G",
+    "158 Bin KW1",
+    "159 Bin KW2",
+    "160 Bin cm KW",
+    "161 Bin Name1",
+    "162 Bin Name2",
+    "163 Bin cm Name",
+    "164 ASPN1",
+    "165 ASPN2",
+    "166 TEV1",
+    "167 TEV2",
+    "168 TEV01",
+    "169 TEV02",
+    "170 EPOCH1",
+    "171 EPOCH2",
+    "176 Bin Label",
+    "176 Bin cm Name",
+]
+
+MERGER_COLS = [
+    "201 Mer XC1",
+    "202 Mer XC2",
+    "203 Mer XC3",
+    "204 Mer VC1",
+    "205 Mer VC2",
+    "206 Mer VC3",
+    "207 Mer M1",
+    "208 Mer M2",
+    "209 Mer M3",
+    "210 Mer XR01",
+    "211 Mer XR02",
+    "212 Mer XR03",
+    "213 Mer VR01",
+    "214 Mer VR02",
+    "215 Mer VR03",
+    "216 Mer XR11",
+    "217 Mer XR12",
+    "218 Mer XR13",
+    "219 Mer VR11",
+    "220 Mer VR12",
+    "221 Mer VR13",
+    "222 Mer POT",
+    "223 Mer RS1",
+    "224 Mer L1",
+    "225 Mer TE1",
+    "226 Mer RS2",
+    "227 Mer L2",
+    "228 Mer TE2",
+    "229 Mer RS3",
+    "230 Mer L3",
+    "231 Mer TE3",
+    "232 Mer RC1",
+    "233 Mer MC1",
+    "234 Mer RC2",
+    "235 Mer MC2",
+    "236 Mer RC3",
+    "237 Mer MC3",
+    "238 Mer A0[au]",
+    "239 Mer ECC0",
+    "240 Mer P0[d]",
+    "241 Mer A1[au]",
+    "242 Mer ECC1",
+    "243 Mer P1[d]",
+    "244 Mer KW1",
+    "245 Mer KW2",
+    "246 Mer KW3",
+    "247 Mer KWC",
+    "248 Mer NAM1",
+    "249 Mer NAM2",
+    "250 Mer NAM3",
+    "251 Mer NAMC",
+]
 
 
 def get_scale_dict(stdout_path: str) -> Dict[str, float]:
@@ -43,269 +290,26 @@ def load_snapshot_data(hdf5_file_path: str, step_key: str) -> Dict:
     with h5py.File(hdf5_file_path, "r") as f:
         step_group = f[step_key]
 
-        scalar_data = {
-            k: step_group["000 Scalars"][i]
-            for i, k in enumerate(
-                [
-                    "TTOT",
-                    "NPAIRS",
-                    "RBAR",
-                    "ZMBAR",
-                    "N",
-                    "TSTAR",
-                    "RDENS(1)",
-                    "RDENS(2)",
-                    "RDENS(3)",
-                    "TTOT/TCR0",
-                    "TSCALE",
-                    "VSTAR",
-                    "RC",
-                    "NC",
-                    "VC",
-                    "RHOM",
-                    "CMAX",
-                    "RSCALE",
-                    "RSMIN",
-                    "DMIN1",
-                    "RG(1)",
-                    "RG(2)",
-                    "RG(3)",
-                    "VG(1)",
-                    "VG(2)",
-                    "VG(3)",
-                    "TIDAL(1)",
-                    "TIDAL(2)",
-                    "TIDAL(3)",
-                    "TIDAL(4)",
-                    "GMG",
-                    "OMEGA",
-                    "DISK",
-                    "A",
-                    "B",
-                    "ZMET",
-                    "ZPARS(1)",
-                    "ZPARS(2)",
-                    "ZPARS(3)",
-                    "ZPARS(4)",
-                    "ZPARS(5)",
-                    "ZPARS(6)",
-                    "ZPARS(7)",
-                    "ZPARS(8)",
-                    "ZPARS(9)",
-                    "ZPARS(10)",
-                    "ZPARS(11)",
-                    "ZPARS(12)",
-                    "ZPARS(13)",
-                    "ZPARS(14)",
-                    "ZPARS(15)",
-                    "ZPARS(16)",
-                    "ZPARS(17)",
-                    "ZPARS(18)",
-                    "ZPARS(19)",
-                    "ZPARS(20)",
-                    "ETAI",
-                    "ETAR",
-                    "ETAU",
-                    "ECLOSE",
-                    "DTMIN",
-                    "RMIN",
-                    "GMIN",
-                    "GMAX",
-                    "SMAX",
-                    "NNBOPT",
-                    "EPOCH0",
-                    "N_SINGLE",
-                    "N_BINARY",
-                    "N_MERGER",
-                ]
-            )
-        }
+        scalar_data = {k: step_group["000 Scalars"][i] for i, k in enumerate(SCALAR_KEYS)}
         time_value = scalar_data["TTOT"]
 
-        single_cols = [
-            "001 X1",
-            "002 X2",
-            "003 X3",
-            "004 V1",
-            "005 V2",
-            "006 V3",
-            "007 A1",
-            "008 A2",
-            "009 A3",
-            "010 AD1",
-            "011 AD2",
-            "012 AD3",
-            "013 D21",
-            "014 D22",
-            "015 D23",
-            "016 D31",
-            "017 D32",
-            "018 D33",
-            "019 STEP",
-            "020 STEPR",
-            "021 T0",
-            "022 T0R",
-            "023 M",
-            "024 NB-Sph",
-            "025 POT",
-            "026 R*",
-            "027 L*",
-            "028 Teff*",
-            "029 RC*",
-            "030 MC*",
-            "031 KW",
-            "032 Name",
-            "033 Type",
-            "035 ASPN",
-            "036 TEV",
-            "037 TEV0",
-            "038 EPOCH",
-        ]
         single_data = {
             col.split(" ", 1)[1]: np.array(step_group[col])
-            for col in single_cols
+            for col in SINGLE_COLS
             if col in step_group
         }
 
-        binary_cols = [
-            "101 Bin cm X1",
-            "102 Bin cm X2",
-            "103 Bin cm X3",
-            "104 Bin cm V1",
-            "105 Bin cm V2",
-            "106 Bin cm V3",
-            "107 Bin cm A1",
-            "108 Bin cm A2",
-            "109 Bin cm A3",
-            "110 Bin cm AD1",
-            "111 Bin cm AD2",
-            "112 Bin cm AD3",
-            "113 Bin cm D21",
-            "114 Bin cm D22",
-            "115 Bin cm D23",
-            "116 Bin cm D31",
-            "117 Bin cm D32",
-            "118 Bin cm D33",
-            "119 Bin cm STEP",
-            "120 Bin cm STEPR",
-            "121 Bin cm T0",
-            "122 Bin cm T0R",
-            "123 Bin M1*",
-            "124 Bin M2*",
-            "125 Bin rel X1",
-            "126 Bin rel X2",
-            "127 Bin rel X3",
-            "128 Bin rel V1",
-            "129 Bin rel V2",
-            "130 Bin rel V3",
-            "131 Bin rel A1",
-            "132 Bin rel A2",
-            "133 Bin rel A3",
-            "134 Bin rel AD1",
-            "135 Bin rel AD2",
-            "136 Bin rel AD3",
-            "137 Bin rel D21",
-            "138 Bin rel D22",
-            "139 Bin rel D23",
-            "140 Bin rel D31",
-            "141 Bin rel D32",
-            "142 Bin rel D33",
-            "143 Bin POT",
-            "144 Bin RS1*",
-            "145 Bin L1*",
-            "146 Bin Teff1*",
-            "147 Bin RS2*",
-            "148 Bin L2*",
-            "149 Bin Teff2*",
-            "150 Bin RC1*",
-            "151 Bin MC1*",
-            "152 Bin RC2*",
-            "153 Bin MC2*",
-            "154 Bin A[au]",
-            "155 Bin ECC",
-            "156 Bin P[d]",
-            "157 Bin G",
-            "158 Bin KW1",
-            "159 Bin KW2",
-            "160 Bin cm KW",
-            "161 Bin Name1",
-            "162 Bin Name2",
-            "163 Bin cm Name",
-            "164 ASPN1",
-            "165 ASPN2",
-            "166 TEV1",
-            "167 TEV2",
-            "168 TEV01",
-            "169 TEV02",
-            "170 EPOCH1",
-            "171 EPOCH2",
-            "176 Bin Label",
-            "176 Bin cm Name",
-        ]
         binary_data = {
             col.split(" ", 1)[1]: np.array(step_group[col])
-            for col in binary_cols
+            for col in BINARY_COLS
             if col in step_group
         }
         if "176 Bin cm Name" in binary_data:
             binary_data["176 Bin Label"] = binary_data.pop("176 Bin cm Name")
 
-        merger_cols = [
-            "201 Mer XC1",
-            "202 Mer XC2",
-            "203 Mer XC3",
-            "204 Mer VC1",
-            "205 Mer VC2",
-            "206 Mer VC3",
-            "207 Mer M1",
-            "208 Mer M2",
-            "209 Mer M3",
-            "210 Mer XR01",
-            "211 Mer XR02",
-            "212 Mer XR03",
-            "213 Mer VR01",
-            "214 Mer VR02",
-            "215 Mer VR03",
-            "216 Mer XR11",
-            "217 Mer XR12",
-            "218 Mer XR13",
-            "219 Mer VR11",
-            "220 Mer VR12",
-            "221 Mer VR13",
-            "222 Mer POT",
-            "223 Mer RS1",
-            "224 Mer L1",
-            "225 Mer TE1",
-            "226 Mer RS2",
-            "227 Mer L2",
-            "228 Mer TE2",
-            "229 Mer RS3",
-            "230 Mer L3",
-            "231 Mer TE3",
-            "232 Mer RC1",
-            "233 Mer MC1",
-            "234 Mer RC2",
-            "235 Mer MC2",
-            "236 Mer RC3",
-            "237 Mer MC3",
-            "238 Mer A0[au]",
-            "239 Mer ECC0",
-            "240 Mer P0[d]",
-            "241 Mer A1[au]",
-            "242 Mer ECC1",
-            "243 Mer P1[d]",
-            "244 Mer KW1",
-            "245 Mer KW2",
-            "246 Mer KW3",
-            "247 Mer KWC",
-            "248 Mer NAM1",
-            "249 Mer NAM2",
-            "250 Mer NAM3",
-            "251 Mer NAMC",
-        ]
         merger_data = {
             col.split(" ", 1)[1]: np.array(step_group[col])
-            for col in merger_cols
+            for col in MERGER_COLS
             if col in step_group
         }
 
@@ -380,6 +384,118 @@ def dataframes_from_hdf5_file(hdf5_file_path: str) -> Dict[str, pd.DataFrame]:
         "singles": df_singles,
         "binaries": df_binaries,
         "mergers": df_mergers,
+    }
+
+
+def _logical_column_map(dataset_cols: Sequence[str]) -> Dict[str, str]:
+    """Map logical column name -> raw HDF5 dataset key, preferring the first occurrence."""
+    mapping: Dict[str, str] = {}
+    for col in dataset_cols:
+        logical_name = col.split(" ", 1)[1]
+        mapping.setdefault(logical_name, col)
+    return mapping
+
+
+_SINGLE_LOGICAL_TO_DATASET = _logical_column_map(SINGLE_COLS)
+_MERGER_LOGICAL_TO_DATASET = _logical_column_map(MERGER_COLS)
+
+# Slot 176 stores the same physical quantity ("Bin Label") under two
+# historical dataset names: "176 Bin Label" in current runs, "176 Bin cm
+# Name" in some archived runs. Map both to the "Bin Label" logical name so
+# the raw reader never collides with the real "163 Bin cm Name" column
+# (unlike load_snapshot_data's binary_data dict comprehension, which does
+# collide on the older name -- see the module docstring note above
+# BINARY_COLS; that legacy behavior is left untouched here).
+_BINARY_LOGICAL_TO_DATASET = _logical_column_map(
+    [col for col in BINARY_COLS if col != "176 Bin cm Name"]
+)
+_BINARY_ALT_DATASET_FOR_LOGICAL = {"Bin Label": "176 Bin cm Name"}
+
+_RAW_TABLE_LOGICAL_MAPS = {
+    "singles": _SINGLE_LOGICAL_TO_DATASET,
+    "binaries": _BINARY_LOGICAL_TO_DATASET,
+    "mergers": _MERGER_LOGICAL_TO_DATASET,
+}
+
+
+def raw_dataframes_from_hdf5_file(
+    hdf5_path: str,
+    tables: Sequence[str],
+    columns_by_table: Optional[Mapping[str, Optional[Sequence[str]]]] = None,
+) -> Dict[str, pd.DataFrame]:
+    """Read selected tables/columns straight from HDF5, with no derived columns.
+
+    Unlike ``dataframes_from_hdf5_file`` (backing the L1-feather-cached
+    "processed" reader), this performs h5py-level column projection (only
+    requested dataset arrays are read off disk), preserves source dtypes
+    exactly (no float64 upcasting), and applies no NS/BH display clipping or
+    derived columns (``Time[Myr]``, ``X [pc]``, ...) -- deriving those is the
+    caller's job. Rows are deduplicated by TTOT within this one file, matching
+    ``dataframes_from_hdf5_file``'s intra-file dedup. A requested table
+    missing from every Step group in this file comes back as an empty
+    DataFrame. Every returned singles/binaries/mergers row carries a ``TTOT``
+    column; a requested ``scalars`` row always includes ``TTOT`` too.
+
+    Args:
+        hdf5_path: Path to the HDF5 file.
+        tables: Which of ``scalars``/``singles``/``binaries``/``mergers`` to read.
+        columns_by_table: Optional ``{table: [logical column names]}``
+            projection. ``None`` (or a missing key) reads all columns for
+            that table.
+    """
+    requested_tables = list(dict.fromkeys(tables))
+    columns_by_table = columns_by_table or {}
+    frames_by_table: Dict[str, list[pd.DataFrame]] = {table: [] for table in requested_tables}
+    seen_ttots: set[float] = set()
+
+    with h5py.File(hdf5_path, "r") as f:
+        step_keys = sorted(k for k in f.keys() if k.startswith("Step#"))
+        for step_key in step_keys:
+            group = f[step_key]
+            scalar_array = np.array(group["000 Scalars"])
+            scalar_row = dict(zip(SCALAR_KEYS, scalar_array))
+            ttot = float(scalar_row["TTOT"])
+            if ttot in seen_ttots:
+                continue
+            seen_ttots.add(ttot)
+
+            if "scalars" in requested_tables:
+                requested_cols = columns_by_table.get("scalars")
+                if requested_cols is None:
+                    row = dict(scalar_row)
+                else:
+                    row = {col: scalar_row[col] for col in requested_cols if col in scalar_row}
+                row.setdefault("TTOT", ttot)
+                frames_by_table["scalars"].append(pd.DataFrame([row]))
+
+            for table_name, logical_map in _RAW_TABLE_LOGICAL_MAPS.items():
+                if table_name not in requested_tables:
+                    continue
+                requested_cols = columns_by_table.get(table_name)
+                logical_names = (
+                    [name for name in logical_map if name != "TTOT"]
+                    if requested_cols is None
+                    else [name for name in requested_cols if name != "TTOT" and name in logical_map]
+                )
+                data: Dict[str, np.ndarray] = {}
+                for logical_name in logical_names:
+                    dataset_name = logical_map[logical_name]
+                    if (
+                        dataset_name not in group
+                        and logical_name in _BINARY_ALT_DATASET_FOR_LOGICAL
+                    ):
+                        dataset_name = _BINARY_ALT_DATASET_FOR_LOGICAL[logical_name]
+                    if dataset_name in group:
+                        data[logical_name] = np.array(group[dataset_name])
+                if not data:
+                    continue
+                df = pd.DataFrame(data)
+                df["TTOT"] = ttot
+                frames_by_table[table_name].append(df)
+
+    return {
+        table: pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        for table, frames in frames_by_table.items()
     }
 
 

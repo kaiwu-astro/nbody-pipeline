@@ -73,8 +73,15 @@ def _make_config(tmp_path: Path, simu_names: list[str]) -> Mock:
     return config
 
 
-def test_parquet_features_lists_both_pilots() -> None:
-    assert set(PARQUET_FEATURES) == {"compact_object_history", "snapshot_summary"}
+def test_parquet_features_lists_pilots_and_lake_tables() -> None:
+    assert set(PARQUET_FEATURES) == {
+        "compact_object_history",
+        "snapshot_summary",
+        "snapshot_singles",
+        "snapshot_binaries",
+        "snapshot_mergers",
+        "snapshot_scalars",
+    }
 
 
 def test_feature_dataset_glob_dataset_style(tmp_path: Path) -> None:

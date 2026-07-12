@@ -83,6 +83,16 @@ path.
   Heavy or science-specific derived quantities belong in a dedicated feature
   task instead (see Roadmap #2 for why some existing derived columns need to
   move out of the reader).
+- **`hdf5_reader_kind = "raw"` for tasks needing untouched source values**: a
+  task that must not see `read_file`'s NS/BH display clipping, or must not
+  read/write the L1 feather cache (e.g. because the source/archive directory
+  should never get new files written next to it), sets the class attribute
+  `hdf5_reader_kind = "raw"`. `HDF5ScanRunner` then routes that task's file
+  read through `HDF5FileProcessor.read_raw_tables` ->
+  `raw_dataframes_from_hdf5_file` instead of `read_tables`. All tasks sharing
+  one file read must agree on `hdf5_reader_kind`; the runner raises if they
+  do not. See `nbody_pipeline.analysis.particle_lake` for the reference
+  usage.
 - **`plot_hdf5_file` visualizer freeze**: do not add new visualizers to
   `SimulationPlotter.plot_hdf5_file` until the plot-task registry (Roadmap #3)
   exists.
@@ -131,10 +141,35 @@ ordered plan. Items are loosely ordered by dependency.
    coll.13/coal.24 lineage) and `escaper_events`, using the same
    `ParquetDatasetCacheMixin` shape and a new schema YAML each. These unlock
    an `is_bound`/escape flag for a future `compact_object_history` v2.
-5. **Full particle lake** (explicitly deferred by user decision this round):
-   revisit where Parquet parts get written (writing from worker processes is
-   safe too, since part paths are unique per source file) and whether
-   coordinates/velocities should be downcast to `float32`.
+5. **Full particle lake** -- implemented. Four new schema-registered Parquet
+   tables cover every snapshot (not just compact objects), in
+   `nbody_pipeline/analysis/particle_lake.py`:
+   - `snapshot_singles` / `snapshot_binaries` / `snapshot_mergers`
+     (`object_rows`, `ParquetDatasetCacheMixin`): raw, force-derivative-free
+     column subsets (see the column-drop rationale in each schema YAML's
+     descriptions), coordinates/velocities/physical quantities downcast to
+     `float32` (ids/`ttot`/`time_myr` stay `int64`/`float64`).
+   - `snapshot_scalars` (`snapshot_scalar`, `ParquetTableCacheMixin`): one row
+     per TTOT, every valid slot of the raw HDF5 scalars array.
+
+   All four tasks set `hdf5_reader_kind = "raw"` (see Normative policies
+   below) so they never touch the L1 feather cache and never apply the NS/BH
+   display clipping `read_file` bakes in. The three `object_rows` tasks use
+   the Risks #2 worker-direct-write escape hatch unconditionally (not just
+   under `parallel=True`): `process_file` calls
+   `ParquetDatasetCacheMixin.write_part` itself and returns only
+   `{"part", "row_count", "ttot_min", "ttot_max", "file_meta"}`, never the
+   full DataFrame.
+
+   Storage: an optional second root, `paths.lake_dir` ->
+   `config.lake_dir_of[simu]`, routed via
+   `nbody_pipeline.analysis.cache_paths.LAKE_FEATURES` (falls back to
+   `analysis_cache_dir` when `paths.lake_dir` is unset, so tests/configs that
+   never set it keep working unmodified). Not run by nightly
+   `update_analysis_store`; build explicitly with `python -m nbody_pipeline
+   analyze --features lake`. See `scripts/lake_preflight.py` for the
+   read-only duplicate/overlap check that should run before a
+   full-simulation (unsampled, `sample_every_nb_time: null`) rebuild.
 6. **VO release export**: a `release/` builder that exports `public: true`
    columns (per the schema registry) to VOTable via `astropy`; unit/UCD
    metadata is already in place by this point.
@@ -150,13 +185,17 @@ ordered plan. Items are loosely ordered by dependency.
    hook so a Parquet dataset task can clear stale parts on a forced rebuild.
 2. **Worker to main-process pickle volume**: for late evolutionary stages with
    many white dwarfs, per-file compact-object row counts can reach
-   10^5-10^6. Mitigation order: tight column projection (done from the
-   start), then downcast coordinates/velocities to `float32` if needed (schema
+   10^5-10^6 (and full-snapshot singles/binaries row counts are ~10^6-10^7 per
+   file). Mitigation order: tight column projection (done from the start),
+   then downcast coordinates/velocities to `float32` if needed (schema
    change), then escape hatch of writing the part directly inside
-   `process_file` in the worker and returning only
-   `{"part", "row_count", "file_meta"}` to the main process (part paths are
-   unique per source file, so there is no write collision). This escape
-   hatch is documented here but not implemented this round.
+   `process_file` and returning only `{"part", "row_count", "ttot_min",
+   "ttot_max", "file_meta"}` to the main process (part paths are unique per
+   source file, so there is no write collision). Implemented as
+   `ParquetDatasetCacheMixin.write_part`, used unconditionally (serial or
+   parallel) by the particle-lake `object_rows` tasks (Roadmap #5); the pilot
+   `CompactObjectHistoryTask` still uses the smaller `"rows"` shape since its
+   per-file row counts stay in the 10^2-10^4 range.
 3. **Concurrent scan invocations**: e.g. `analyze` and a nightly plotting run
    touching the same simulation concurrently. This has the same exposure as
    the existing feather cache today (atomic `os.replace` prevents corruption,

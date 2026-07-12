@@ -44,6 +44,12 @@ paths:
   # warning) instead of failing the plotting run.
   # gwtc_catalog_csv: "/path/to/GWTC_catalog.csv"
 
+  # Optional: second storage root for the full particle-lake feature store
+  # (docs/analysis_architecture.md Roadmap #5). Only needed if you run
+  # `analyze --features lake`; unset otherwise. Layout is
+  # <lake_dir>/<simu_name>/<feature>/... (same shape as analysis_cache_dir).
+  # lake_dir: "/path/to/particle_lake"
+
 # Optional: figure filename prefix per simulation (defaults to "" if unset).
 figure_prefixes:
   my_sim: "my_sim_2026"
@@ -95,3 +101,13 @@ compact_object_history:
 
 snapshot_summary:
   enabled: true
+
+# Optional: full snapshot particle lake (singles/binaries/mergers/scalars).
+# Requires paths.lake_dir above. Not run by nightly update_analysis_store;
+# only via explicit `analyze --features lake`.
+# particle_lake:
+#   enabled: false
+#   scan:
+#     sample_every_nb_time: null   # collect every snapshot, not the 1.0 default
+#     use_hdf5_cache: false        # never write feather next to source/archive files
+#     checkpoint_every_files: 25

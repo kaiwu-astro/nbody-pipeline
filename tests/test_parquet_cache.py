@@ -362,3 +362,82 @@ def test_feather_and_parquet_tasks_share_one_read_per_file(tmp_path: Path) -> No
     assert processor.read_count == 1
     assert (tmp_path / "feather_cache" / "feather_task.feather").exists()
     assert list((tmp_path / "cache" / "feature" / "data").glob("*.parquet"))
+
+
+class FakeCompressedDatasetTask(FakeDatasetTask):
+    """A dataset task overriding parquet_write_options, like the lake tasks."""
+
+    @property
+    def parquet_write_options(self):
+        return {"compression": "zstd", "use_byte_stream_split": True, "row_group_size": 2}
+
+
+def test_write_part_applies_parquet_write_options(tmp_path: Path) -> None:
+    import pyarrow.parquet as pq
+
+    config = make_config(tmp_path)
+    paths, tables = _make_files(tmp_path, 1)
+    task = FakeCompressedDatasetTask(tmp_path / "cache" / "feature")
+    runner = HDF5ScanRunner(config, FakeProcessor(paths, tables))
+
+    runner.run("sim", [task], HDF5ScanOptions(wait_age_hour=0))
+
+    (part_path,) = task.data_dir.glob("*.parquet")
+    parquet_file = pq.ParquetFile(part_path)
+    metadata = parquet_file.metadata
+    assert metadata.row_group(0).column(0).compression.upper() == "ZSTD"
+    read_back = pd.read_parquet(part_path)
+    pd.testing.assert_frame_equal(read_back.reset_index(drop=True), pd.read_parquet(part_path))
+
+
+def test_default_parquet_write_options_are_empty(tmp_path: Path) -> None:
+    task = FakeDatasetTask(tmp_path / "cache" / "feature")
+    assert task.parquet_write_options == {}
+
+
+class WorkerDirectWriteDatasetTask(FakeDatasetTask):
+    """process_file calls write_part itself and returns the 'part' shape."""
+
+    def process_file(self, hdf5_path, df_dict, meta, cache_df):
+        ttots = df_dict["scalars"]["TTOT"].tolist()
+        rows = _rows(hdf5_path, ttots, float(len(hdf5_path)))
+        part_meta = self.write_part(hdf5_path, rows)
+        return {**part_meta, "file_meta": default_file_meta(hdf5_path, df_dict)}
+
+
+def test_merge_file_result_accepts_worker_direct_write_shape(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    paths, tables = _make_files(tmp_path, 2)
+    task = WorkerDirectWriteDatasetTask(tmp_path / "cache" / "feature")
+    runner = HDF5ScanRunner(config, FakeProcessor(paths, tables))
+
+    runner.run("sim", [task], HDF5ScanOptions(wait_age_hour=0))
+
+    combined = pd.read_parquet(task.data_dir)
+    assert sorted(combined["ttot"].tolist()) == [0.0, 1.0]
+    manifest = json.loads(task.manifest_path.read_text())
+    assert all(entry.get("part") for entry in manifest["processed_files"].values())
+    assert all(entry.get("row_count") == 1 for entry in manifest["processed_files"].values())
+
+
+def test_merge_file_result_rows_and_part_shapes_produce_identical_manifests(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    paths, tables = _make_files(tmp_path, 1)
+
+    rows_task = FakeDatasetTask(tmp_path / "cache" / "rows")
+    HDF5ScanRunner(config, FakeProcessor(paths, tables)).run(
+        "sim", [rows_task], HDF5ScanOptions(wait_age_hour=0)
+    )
+    part_task = WorkerDirectWriteDatasetTask(tmp_path / "cache" / "part")
+    HDF5ScanRunner(config, FakeProcessor(paths, tables)).run(
+        "sim", [part_task], HDF5ScanOptions(wait_age_hour=0)
+    )
+
+    rows_meta = json.loads(rows_task.manifest_path.read_text())["processed_files"]
+    part_meta = json.loads(part_task.manifest_path.read_text())["processed_files"]
+    for path in paths:
+        assert rows_meta[path]["row_count"] == part_meta[path]["row_count"]
+        assert rows_meta[path]["ttot_min"] == part_meta[path]["ttot_min"]
+        assert rows_meta[path]["ttot_max"] == part_meta[path]["ttot_max"]

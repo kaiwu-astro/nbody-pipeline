@@ -32,8 +32,13 @@ from nbody_pipeline.analysis import (
     CurrentMassLagrangianProcessor,
     GalacticEnergyAngularMomentumProcessor,
     GalacticOrbitProcessor,
+    ParticleLakeProcessor,
     ParticleTracker,
     SnapshotSummaryProcessor,
+)
+from nbody_pipeline.analysis.cache_paths import (
+    COMPACT_OBJECT_HISTORY_FEATURE,
+    SNAPSHOT_SUMMARY_FEATURE,
 )
 from nbody_pipeline.analysis.hdf5_scan import HDF5ScanSession, ttot_matches_sample
 
@@ -372,6 +377,18 @@ def _build_purge_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_ANALYZE_FEATURE_ALIASES = {
+    "pilot": (COMPACT_OBJECT_HISTORY_FEATURE, SNAPSHOT_SUMMARY_FEATURE),
+    "lake": "lake",  # sentinel: expands to the full 4-table ParticleLakeProcessor bundle
+}
+_ANALYZE_FEATURE_CHOICES = (
+    "pilot",
+    "lake",
+    COMPACT_OBJECT_HISTORY_FEATURE,
+    SNAPSHOT_SUMMARY_FEATURE,
+)
+
+
 def _build_analyze_parser() -> argparse.ArgumentParser:
     """Build the analyze subcommand parser."""
     parser = argparse.ArgumentParser(prog="python -m nbody_pipeline analyze")
@@ -381,6 +398,17 @@ def _build_analyze_parser() -> argparse.ArgumentParser:
         help="Limit analysis to one simulation (default: all configured)",
     )
     parser.add_argument(
+        "--features",
+        default="pilot",
+        help=(
+            "Comma-separated feature(s) to build: 'pilot' (compact_object_history + "
+            "snapshot_summary, default), 'lake' (the full 4-table particle lake: "
+            "snapshot_singles/binaries/mergers/scalars -- large, not run by nightly "
+            "update_analysis_store), or an individual pilot feature name "
+            f"({COMPACT_OBJECT_HISTORY_FEATURE!r}/{SNAPSHOT_SUMMARY_FEATURE!r})."
+        ),
+    )
+    parser.add_argument(
         "--force", action="store_true", help="Force a full rebuild of the feature store"
     )
     parser.add_argument(
@@ -388,6 +416,24 @@ def _build_analyze_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser
+
+
+def _resolve_analyze_features(raw: str) -> set[str]:
+    """Expand a comma-separated --features value into a set of {'lake', <pilot feature name>}."""
+    tokens = [token.strip() for token in raw.split(",") if token.strip()]
+    resolved: set[str] = set()
+    for token in tokens:
+        if token not in _ANALYZE_FEATURE_CHOICES:
+            raise ValueError(
+                f"Unknown --features value {token!r}; choose from {_ANALYZE_FEATURE_CHOICES}"
+            )
+        if token == "pilot":
+            resolved.update(_ANALYZE_FEATURE_ALIASES["pilot"])
+        elif token == "lake":
+            resolved.add("lake")
+        else:
+            resolved.add(token)
+    return resolved
 
 
 def _build_main_parser() -> argparse.ArgumentParser:
@@ -417,7 +463,7 @@ def _build_main_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser("purge", help="Preview or delete generated plot files")
     subparsers.add_parser(
-        "analyze", help="Build/update the compact_object_history and snapshot_summary feature store"
+        "analyze", help="Build/update the Parquet feature store (--features pilot|lake|<name>)"
     )
     subparsers.add_parser("help", help="Show this help, or help for a command")
 
@@ -429,6 +475,7 @@ def _build_main_parser() -> argparse.ArgumentParser:
         "  python -m nbody_pipeline help purge\n"
         "  python -m nbody_pipeline purge --list-targets\n"
         "  python -m nbody_pipeline analyze --simu 20sb\n"
+        "  python -m nbody_pipeline analyze --simu 20sb --features lake\n"
         "\n"
         "No config source (--config / NBODY_CONFIG / ./nbody_config.yaml) is\n"
         "required for --help/help/purge --list-targets; the main pipeline and other\n"
@@ -540,17 +587,31 @@ def _main_analyze(argv: list[str]) -> int:
         parser.error(f"Unknown simulation: {args.simu_name}")
     simu_names = [args.simu_name] if args.simu_name else list(config.pathof.keys())
 
+    try:
+        features = _resolve_analyze_features(args.features)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     compact_object_history_processor = CompactObjectHistoryProcessor(config)
     snapshot_summary_processor = SnapshotSummaryProcessor(config)
+    particle_lake_processor = ParticleLakeProcessor(config)
     session = HDF5ScanSession(config)
     for simu_name in simu_names:
-        session.add_job(
-            compact_object_history_processor.build_scan_job(simu_name, force=args.force)
-        )
-        session.add_job(snapshot_summary_processor.build_scan_job(simu_name, force=args.force))
+        if COMPACT_OBJECT_HISTORY_FEATURE in features:
+            session.add_job(
+                compact_object_history_processor.build_scan_job(simu_name, force=args.force)
+            )
+        if SNAPSHOT_SUMMARY_FEATURE in features:
+            session.add_job(snapshot_summary_processor.build_scan_job(simu_name, force=args.force))
+        if "lake" in features:
+            for job in particle_lake_processor.build_scan_jobs(simu_name, force=args.force):
+                session.add_job(job)
     session.run()
 
-    print(f"Analyzed {len(simu_names)} simulation(s): {', '.join(simu_names)}")
+    print(
+        f"Analyzed {len(simu_names)} simulation(s) ({', '.join(sorted(features))}): "
+        f"{', '.join(simu_names)}"
+    )
     return 0
 
 

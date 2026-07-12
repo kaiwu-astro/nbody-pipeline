@@ -102,6 +102,11 @@ class ConfigManager:
         self._legacy_cache_dir_suffix: Optional[str] = paths.get("cache_dir_suffix")
         self._input_files_of: Dict[str, str] = paths.get("input_files") or {}
 
+        # Optional second storage root for the full particle-lake feature
+        # store (see docs/analysis_architecture.md Roadmap #5). Unset by
+        # default; lake-routed features fall back to analysis_cache_dir.
+        self.lake_dir: Optional[str] = paths.get("lake_dir")
+
         # Optional standalone-cache path overrides (fall back to sensible
         # defaults in the consuming code when unset).
         self.teff_rgb_cache: Optional[str] = paths.get("teff_rgb_cache")
@@ -138,6 +143,7 @@ class ConfigManager:
         ]
         self.compact_object_history: Dict[str, Any] = config["compact_object_history"]
         self.snapshot_summary: Dict[str, Any] = config["snapshot_summary"]
+        self.particle_lake: Dict[str, Any] = config["particle_lake"]
 
         # Physics constants
         phys = config["physics"]
@@ -190,6 +196,8 @@ class ConfigManager:
                 self.analysis_cache_dir = user_config["paths"]["analysis_cache_dir"]
             elif "cache_dir_suffix" in user_config["paths"] and not self.analysis_cache_dir:
                 self._legacy_cache_dir_suffix = user_config["paths"]["cache_dir_suffix"]
+            if "lake_dir" in user_config["paths"]:
+                self.lake_dir = user_config["paths"]["lake_dir"]
             if "teff_rgb_cache" in user_config["paths"]:
                 self.teff_rgb_cache = user_config["paths"]["teff_rgb_cache"]
             if "gwtc_catalog_csv" in user_config["paths"]:
@@ -239,6 +247,9 @@ class ConfigManager:
 
         if "snapshot_summary" in user_config:
             self.snapshot_summary.update(user_config["snapshot_summary"])
+
+        if "particle_lake" in user_config:
+            self._deep_update(self.particle_lake, user_config["particle_lake"])
 
     def _raise_for_removed_config_keys(self, user_config: Dict[str, Any]) -> None:
         """Reject pre-1.0 scan configuration keys with migration guidance."""
@@ -304,6 +315,12 @@ class ConfigManager:
                 for simu_name, path in self.pathof.items()
             }
             self.particle_df_cache_dir_of = dict(self.analysis_cache_dir_of)
+
+        self.lake_dir_of: Dict[str, str] = (
+            {simu_name: str(Path(self.lake_dir) / simu_name) for simu_name in self.pathof}
+            if self.lake_dir
+            else {}
+        )
 
         # Calculate memory capacity
         try:
