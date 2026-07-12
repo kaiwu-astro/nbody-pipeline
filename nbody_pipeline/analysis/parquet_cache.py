@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict
@@ -51,6 +52,38 @@ def _part_filename(hdf5_path: str) -> str:
     stem = Path(hdf5_path).stem
     digest = hashlib.sha1(os.path.abspath(hdf5_path).encode("utf-8")).hexdigest()[:8]
     return f"part-{stem}-{digest}.parquet"
+
+
+def _replace_with_retry(src: Path, dst: Path, attempts: int = 5, base_delay: float = 0.5) -> None:
+    """``os.replace`` with retry on ``FileNotFoundError``.
+
+    During the real full-archive lake build, ``os.replace(tmp_path, part_path)``
+    occasionally raised ``FileNotFoundError`` for ``tmp_path`` immediately after
+    this same process had just written it -- reproduced only under the real
+    ~32-way-concurrent-writes-into-one-directory production load on this shared
+    filesystem, never in an isolated synthetic stress test with the same
+    concurrency (ruling out a same-name race; ``src`` is already
+    per-call-unique). Likely a transient directory-entry visibility hiccup on
+    the underlying network filesystem under heavy concurrent metadata load.
+    Retrying (the source file's *content* was already fully written and
+    fsync'd by ``to_parquet`` before this call) is safe and cheap relative to
+    losing an entire multi-hour scan.
+    """
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except FileNotFoundError:
+            if attempt == attempts - 1:
+                raise
+            logger.warning(
+                "os.replace(%s, %s) found no such tmp file (attempt %d/%d), retrying",
+                src,
+                dst,
+                attempt + 1,
+                attempts,
+            )
+            time.sleep(base_delay * (2**attempt))
 
 
 class ParquetDatasetCacheMixin:
@@ -127,15 +160,13 @@ class ParquetDatasetCacheMixin:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         part_name = _part_filename(hdf5_path)
         part_path = self.data_dir / part_name
-        # Per-call-unique tmp name (pid + random suffix), not just the final name +
-        # ".tmp": a fixed, predictable tmp path briefly produced spurious
-        # FileNotFoundError on os.replace() during the real full-archive build on
-        # this shared filesystem under ~32-way concurrent writes into one
-        # directory. A unique tmp path removes any dependency on that path being
-        # untouched by anything else, regardless of the exact root cause.
+        # Per-call-unique tmp name (pid + random suffix): rules out any two calls
+        # ever targeting the same tmp path, though this alone did not fully explain
+        # the flake below (a synthetic 32-way concurrent stress test with unique
+        # names never reproduced it).
         tmp_path = part_path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
         rows.to_parquet(tmp_path, index=False, **self.parquet_write_options)
-        os.replace(tmp_path, part_path)
+        _replace_with_retry(tmp_path, part_path)
 
         ttot_min = float(rows["ttot"].min()) if len(rows) and "ttot" in rows.columns else None
         ttot_max = float(rows["ttot"].max()) if len(rows) and "ttot" in rows.columns else None

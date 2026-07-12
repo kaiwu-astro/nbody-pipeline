@@ -15,9 +15,11 @@ from nbody_pipeline.analysis.hdf5_scan import (
     default_file_meta,
     replace_ttot_rows,
 )
+from nbody_pipeline.analysis import parquet_cache
 from nbody_pipeline.analysis.parquet_cache import (
     ParquetDatasetCacheMixin,
     ParquetTableCacheMixin,
+    _replace_with_retry,
 )
 from nbody_pipeline.schemas import ColumnSchema, SchemaValidationError, TableSchema
 from tests.test_hdf5_scan import FailingProcessor, FakeProcessor, FileBackedTask, make_config
@@ -393,6 +395,47 @@ def test_write_part_applies_parquet_write_options(tmp_path: Path) -> None:
 def test_default_parquet_write_options_are_empty(tmp_path: Path) -> None:
     task = FakeDatasetTask(tmp_path / "cache" / "feature")
     assert task.parquet_write_options == {}
+
+
+def test_replace_with_retry_succeeds_after_transient_file_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "src.tmp"
+    dst = tmp_path / "dst.parquet"
+    src.write_text("data")
+
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(a, b):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise FileNotFoundError(f"transient: {a}")
+        return real_replace(a, b)
+
+    monkeypatch.setattr(parquet_cache.os, "replace", flaky_replace)
+    monkeypatch.setattr(parquet_cache.time, "sleep", lambda _seconds: None)
+
+    _replace_with_retry(src, dst, attempts=5, base_delay=0.0)
+
+    assert calls["n"] == 3
+    assert dst.read_text() == "data"
+
+
+def test_replace_with_retry_raises_after_exhausting_attempts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "src.tmp"
+    dst = tmp_path / "dst.parquet"
+
+    def always_fails(a, b):
+        raise FileNotFoundError(f"gone: {a}")
+
+    monkeypatch.setattr(parquet_cache.os, "replace", always_fails)
+    monkeypatch.setattr(parquet_cache.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(FileNotFoundError, match="gone"):
+        _replace_with_retry(src, dst, attempts=3, base_delay=0.0)
 
 
 class WorkerDirectWriteDatasetTask(FakeDatasetTask):

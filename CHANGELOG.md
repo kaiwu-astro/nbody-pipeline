@@ -45,10 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signature") instead of aborting the whole scan; `compact_object_history`/
   `snapshot_summary` keep the original fail-fast-and-checkpoint behavior.
   `ParquetDatasetCacheMixin.write_part` now writes to a per-call-unique tmp
-  filename (pid + random suffix) instead of a fixed, predictable one: under
-  ~32-way concurrent writes into one directory during the real full-archive
-  build, the fixed tmp name occasionally raised a spurious `FileNotFoundError`
-  from `os.replace()` on this shared filesystem. See
+  filename (pid + random suffix) instead of a fixed, predictable one, and
+  retries `os.replace()` with backoff on `FileNotFoundError`: under real
+  ~32-way concurrent writes into one directory during the full-archive build,
+  `os.replace()` occasionally raised a spurious `FileNotFoundError` for a tmp
+  file this same process had just written (not reproducible in an isolated
+  synthetic stress test at the same concurrency, so likely a transient
+  directory-entry visibility hiccup on this shared filesystem under heavy
+  concurrent metadata load, not a same-name race). See
   `docs/analysis_architecture.md` Roadmap #5.
 - `HDF5FileProcessor.read_raw_tables` / `nbody_pipeline.io.text_parsers.raw_dataframes_from_hdf5_file`:
   an h5py-level raw HDF5 reader (column-projected, source dtypes preserved, no L1

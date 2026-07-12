@@ -214,12 +214,20 @@ ordered plan. Items are loosely ordered by dependency.
      file is still marked processed so it is not retried every run.
    - `ParquetDatasetCacheMixin.write_part`'s tmp file is now named with a
      per-call-unique suffix (`{pid}.{uuid4 hex}.tmp`), not just
-     `{part_name}.tmp`: under ~32-way concurrent writes into one `data/`
-     directory, the fixed tmp name occasionally raised a spurious
-     `FileNotFoundError` from `os.replace()` on this shared filesystem
-     (`old_run_archive` is itself a cross-filesystem symlink into the same
-     `/e/data1` mount the lake writes to). A unique tmp path removes any
-     dependency on that path being untouched by anything else.
+     `{part_name}.tmp`, and the final `os.replace(tmp_path, part_path)` is
+     wrapped in `_replace_with_retry` (a few attempts with exponential
+     backoff). Under real ~32-way concurrent writes into one `data/`
+     directory, `os.replace()` occasionally raised `FileNotFoundError` for a
+     tmp file the same process had just finished writing via `to_parquet`.
+     A synthetic stress test at the same concurrency (plain `os.replace`,
+     then realistic `to_parquet` writes, both with per-call-unique names)
+     never reproduced it, which rules out a same-name race and points to a
+     transient directory-entry visibility hiccup on this shared filesystem
+     under heavy concurrent metadata load in one hot directory (`data1` is
+     mounted as `exa_data1`; `old_run_archive` is itself a cross-filesystem
+     symlink into the same mount the lake writes to). The file's *content*
+     is already fully written before the retry loop runs, so retrying the
+     rename is safe.
 6. **VO release export**: a `release/` builder that exports `public: true`
    columns (per the schema registry) to VOTable via `astropy`; unit/UCD
    metadata is already in place by this point.
