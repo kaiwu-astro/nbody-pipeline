@@ -53,7 +53,14 @@ columns:
     dtype: int64
     unit: null
     ucd: meta.id
-    description: Merger product / center-of-mass identifier (raw HDF5 Mer NAMC).
+    description: >
+      Merger product / center-of-mass identifier (raw HDF5 Mer NAMC), assigned by the
+      caller in NBODY6++GPU's custom_store_binary routine -- a numbering scheme
+      independent of snapshot_binaries.cm_id (see that column's description for a
+      confirmed cross-scheme collision NBODY6++GPU has between KS-pair and wide-binary
+      cm names; whether mergers' NCM scheme is similarly collision-prone was not
+      exhaustively verified). Prefer (object_id_1, object_id_2, object_id_3) if a
+      per-snapshot unique key is needed.
     public: true
     nullable: false
   - name: kw_1

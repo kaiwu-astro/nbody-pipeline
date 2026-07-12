@@ -29,8 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checkpoints written by two consecutive run directories) are resolved at write time,
   per-TTOT (`ParticleLakeProcessor`/`compute_ttot_dedup_exclusions`, cached at
   `<lake_dir>/<simu>/ttot_dedup_map.json`) rather than by excluding whole run
-  directories, so no legitimate snapshot data is discarded. See
-  `docs/analysis_architecture.md` Roadmap #5.
+  directories, so no legitimate snapshot data is discarded. `snapshot_binaries.cm_id`
+  and `snapshot_mergers.cm_id` are documented as NOT reliably unique within one
+  snapshot -- confirmed against real pilot data and NBODY6++GPU source
+  (`custom_output.F`) that KS-pair and wide-binary center-of-mass names use
+  independent, numerically colliding schemes; use (`object_id_1`, `object_id_2`[,
+  `object_id_3`]) as the per-snapshot unique key instead (also now the part-internal
+  sort key). See `docs/analysis_architecture.md` Roadmap #5.
 - `HDF5FileProcessor.read_raw_tables` / `nbody_pipeline.io.text_parsers.raw_dataframes_from_hdf5_file`:
   an h5py-level raw HDF5 reader (column-projected, source dtypes preserved, no L1
   feather cache writes) for `HDF5ScanTask`s that declare `hdf5_reader_kind = "raw"`.

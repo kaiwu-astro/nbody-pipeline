@@ -504,7 +504,11 @@ class SnapshotBinariesTask(ParquetDatasetCacheMixin):
                 "source_hdf5_path": hdf5_path,
             }
         )
-        rows = rows.sort_values(["ttot", "cm_id"], kind="stable").reset_index(drop=True)
+        # cm_id is not a reliable per-snapshot unique key (see its schema description);
+        # sort by the confirmed-unique (object_id_1, object_id_2) pair instead.
+        rows = rows.sort_values(
+            ["ttot", "object_id_1", "object_id_2"], kind="stable"
+        ).reset_index(drop=True)
         return rows[list(self.table_schema.column_names())]
 
 
@@ -677,7 +681,11 @@ class SnapshotMergersTask(ParquetDatasetCacheMixin):
                 "source_hdf5_path": hdf5_path,
             }
         )
-        rows = rows.sort_values(["ttot", "cm_id"], kind="stable").reset_index(drop=True)
+        # cm_id's uniqueness is unconfirmed (see its schema description); sort by the
+        # parent-member ids instead, consistent with snapshot_binaries.
+        rows = rows.sort_values(
+            ["ttot", "object_id_1", "object_id_2", "object_id_3"], kind="stable"
+        ).reset_index(drop=True)
         return rows[list(self.table_schema.column_names())]
 
 

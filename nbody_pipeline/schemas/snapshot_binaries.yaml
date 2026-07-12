@@ -1,9 +1,10 @@
 table: snapshot_binaries
 version: 1
 description: >
-  Per-snapshot rows for every binary (one row per Bin cm Name per TTOT), raw-value columns
-  only (no NS/BH display clipping, no force/force-derivative integrator state). See
-  docs/analysis_architecture.md Roadmap #5.
+  Per-snapshot rows for every binary, raw-value columns only (no NS/BH display clipping,
+  no force/force-derivative integrator state). The unordered pair (object_id_1,
+  object_id_2) is the reliable per-snapshot unique key -- NOT cm_id, see its column
+  description. See docs/analysis_architecture.md Roadmap #5.
 columns:
   - name: simulation_id
     dtype: string
@@ -44,7 +45,15 @@ columns:
     dtype: int64
     unit: null
     ucd: meta.id
-    description: Binary center-of-mass identifier (raw HDF5 Bin cm Name).
+    description: >
+      Binary center-of-mass identifier (raw HDF5 Bin cm Name). NOT reliably unique
+      within one snapshot: NBODY6++GPU computes it two different ways depending on
+      bin_label (KS pairs: NZERO + first-member NAME at pairing time, in
+      custom_output.F; wide binaries: NTOT + a per-snapshot sequential counter,
+      unrelated to any particle NAME) and these two ranges can numerically collide
+      since NZERO and NTOT are typically close in value -- confirmed against real
+      simulation data and NBODY6++GPU source (custom_output.F). Use the unordered
+      pair (object_id_1, object_id_2) as the per-snapshot unique key instead.
     public: true
     nullable: false
   - name: kw_1
