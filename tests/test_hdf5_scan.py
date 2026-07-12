@@ -291,7 +291,8 @@ class FakeTask:
     def merge_file_result(self, cache_df, hdf5_path, result):
         return pd.concat([cache_df, result["rows"]], ignore_index=True)
 
-    def write_cache_and_meta(self, cache_df, processed_files, options):
+    def write_cache_and_meta(self, cache_df, processed_files, options, *, prune_orphans=True):
+        del prune_orphans
         self.writes += 1
 
     def finalize_cache(self, cache_df):
@@ -324,7 +325,8 @@ class FileBackedTask(FakeTask):
             "file_meta": {"mtime": 1.0, "ttot": [ttot]},
         }
 
-    def write_cache_and_meta(self, cache_df, processed_files, options):
+    def write_cache_and_meta(self, cache_df, processed_files, options, *, prune_orphans=True):
+        del prune_orphans
         self.writes += 1
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_df.to_feather(self.cache_path)

@@ -216,18 +216,25 @@ ordered plan. Items are loosely ordered by dependency.
      per-call-unique suffix (`{pid}.{uuid4 hex}.tmp`), not just
      `{part_name}.tmp`, and the final `os.replace(tmp_path, part_path)` is
      wrapped in `_replace_with_retry` (a few attempts with exponential
-     backoff). Under real ~32-way concurrent writes into one `data/`
-     directory, `os.replace()` occasionally raised `FileNotFoundError` for a
-     tmp file the same process had just finished writing via `to_parquet`.
-     A synthetic stress test at the same concurrency (plain `os.replace`,
-     then realistic `to_parquet` writes, both with per-call-unique names)
-     never reproduced it, which rules out a same-name race and points to a
-     transient directory-entry visibility hiccup on this shared filesystem
-     under heavy concurrent metadata load in one hot directory (`data1` is
-     mounted as `exa_data1`; `old_run_archive` is itself a cross-filesystem
-     symlink into the same mount the lake writes to). The file's *content*
-     is already fully written before the retry loop runs, so retrying the
-     rename is safe.
+     backoff) as defense in depth. Neither alone fixed the real
+     `FileNotFoundError` seen under `parallel=True` on the full-archive
+     build -- the actual root cause was a **checkpoint/worker race**:
+     `HDF5ScanRunner._write_task_checkpoints` (used for both the periodic
+     `checkpoint_every_files` flush and the crash-flush in the `except`
+     clause) runs in the main process *while other workers in the pool can
+     still be mid-`write_part`* for different files. `write_cache_and_meta`
+     unconditionally called `_prune_orphan_parts`, which treats any
+     `data_dir` entry not yet in `processed_files` as an orphan and deletes
+     it -- including another worker's brand-new tmp file (or a just-renamed
+     `.parquet` part whose `file_result` the main process hadn't consumed
+     yet). `HDF5ScanTask.write_cache_and_meta` gained a
+     `prune_orphans: bool = True` parameter (`ParquetTableCacheMixin` and the
+     feather-backed mixins accept and ignore it, no orphan-part concept
+     there); the runner passes `prune_orphans=False` for every mid-run
+     checkpoint and only prunes at the one point provably safe by
+     construction -- the final `write_cache_and_meta` call after the main
+     `for file_result in file_results` loop has consumed every item `imap`
+     will ever yield, so no worker can still be writing.
 6. **VO release export**: a `release/` builder that exports `public: true`
    columns (per the schema registry) to VOTable via `astropy`; unit/UCD
    metadata is already in place by this point.

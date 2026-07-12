@@ -259,6 +259,35 @@ def test_dataset_cache_prunes_orphan_parts_and_tmp_files(tmp_path: Path) -> None
     assert "part-orphan-deadbeef.parquet.tmp" not in remaining
 
 
+def test_write_cache_and_meta_prune_orphans_false_keeps_unreferenced_files(
+    tmp_path: Path,
+) -> None:
+    """Regression test for a real crash: a mid-run checkpoint's unconditional prune
+    deleted another worker's brand-new, not-yet-referenced tmp/part file out from
+    under it. prune_orphans=False (what the runner now passes for every mid-run
+    checkpoint) must leave unreferenced .tmp/.parquet files alone."""
+    config = make_config(tmp_path)
+    paths, tables = _make_files(tmp_path, 1)
+    cache_dir = tmp_path / "cache" / "feature"
+    task = FakeDatasetTask(cache_dir)
+    HDF5ScanRunner(config, FakeProcessor(paths, tables)).run(
+        "sim", [task], HDF5ScanOptions(wait_age_hour=0)
+    )
+    # Simulate another worker mid-write_part() for a different file at the moment
+    # this checkpoint runs: a fresh tmp file and a fresh, not-yet-reported part.
+    (task.data_dir / "part-inflight-cafef00d.parquet.tmp").write_bytes(b"still writing")
+    (task.data_dir / "part-inflight-cafef00d.parquet").write_bytes(b"just replaced")
+
+    manifest = json.loads(task.manifest_path.read_text())
+    task.write_cache_and_meta(
+        task.read_cache(), manifest["processed_files"], HDF5ScanOptions(), prune_orphans=False
+    )
+
+    remaining = {p.name for p in task.data_dir.iterdir()}
+    assert "part-inflight-cafef00d.parquet.tmp" in remaining
+    assert "part-inflight-cafef00d.parquet" in remaining
+
+
 def test_dataset_cache_mid_run_exception_keeps_manifest_consistent(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     paths, tables = _make_files(tmp_path, 2)

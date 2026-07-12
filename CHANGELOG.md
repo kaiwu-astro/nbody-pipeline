@@ -45,14 +45,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signature") instead of aborting the whole scan; `compact_object_history`/
   `snapshot_summary` keep the original fail-fast-and-checkpoint behavior.
   `ParquetDatasetCacheMixin.write_part` now writes to a per-call-unique tmp
-  filename (pid + random suffix) instead of a fixed, predictable one, and
-  retries `os.replace()` with backoff on `FileNotFoundError`: under real
-  ~32-way concurrent writes into one directory during the full-archive build,
-  `os.replace()` occasionally raised a spurious `FileNotFoundError` for a tmp
-  file this same process had just written (not reproducible in an isolated
-  synthetic stress test at the same concurrency, so likely a transient
-  directory-entry visibility hiccup on this shared filesystem under heavy
-  concurrent metadata load, not a same-name race). See
+  filename (pid + random suffix) and retries `os.replace()` with backoff on
+  `FileNotFoundError` (defense in depth). The actual root cause of the real
+  full-archive build's `FileNotFoundError` under `parallel=True`: mid-run
+  checkpoints (periodic or crash-flush) ran `write_cache_and_meta` ->
+  `_prune_orphan_parts` in the main process while *other* workers could still
+  be mid-`write_part`, so a checkpoint's unconditional "not yet in
+  `processed_files` == orphan" prune could delete another worker's brand-new
+  tmp/part file out from under it. `HDF5ScanTask.write_cache_and_meta` gained
+  a `prune_orphans: bool = True` parameter; the runner now passes `False` for
+  every mid-run checkpoint and only prunes at the one provably-safe point
+  (after every worker's result has been consumed, at the very end of a scan).
+  `compact_object_history`/`snapshot_summary`'s feather-backed cache mixins
+  accept and ignore the new parameter (no orphan-part concept there). See
   `docs/analysis_architecture.md` Roadmap #5.
 - `HDF5FileProcessor.read_raw_tables` / `nbody_pipeline.io.text_parsers.raw_dataframes_from_hdf5_file`:
   an h5py-level raw HDF5 reader (column-projected, source dtypes preserved, no L1

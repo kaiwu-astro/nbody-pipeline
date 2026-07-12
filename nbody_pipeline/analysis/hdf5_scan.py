@@ -125,6 +125,18 @@ class HDF5ScanTask(Protocol):
     never reads/writes the L1 feather cache. All tasks sharing one file read
     (one ``HDF5ScanRunner.run()`` call) must declare the same
     ``hdf5_reader_kind``; mixing raises.
+
+    ``write_cache_and_meta``'s ``prune_orphans`` is ``True`` by default (the
+    old, unconditional behavior) but the runner calls it with ``False`` for
+    every *mid-run* checkpoint (periodic or crash-flush): under
+    ``parallel=True``, other workers can still be mid-``write_part`` (creating
+    a fresh, not-yet-referenced tmp/part file) while a checkpoint runs in the
+    main process, so pruning "orphans" there can delete a live, in-progress
+    write out from under its worker. Only the final post-scan call (after
+    every worker's result has been consumed, so none can still be writing)
+    passes the default ``True``. Cache backends without an orphan-part concept
+    (e.g. ``FeatherMetaCacheMixin``, ``ParquetTableCacheMixin``) simply accept
+    and ignore the flag.
     """
 
     name: str
@@ -156,6 +168,8 @@ class HDF5ScanTask(Protocol):
         cache_df: pd.DataFrame,
         processed_files: Dict[str, Dict[str, Any]],
         options: HDF5ScanOptions,
+        *,
+        prune_orphans: bool = True,
     ) -> None: ...
 
     def finalize_cache(self, cache_df: pd.DataFrame) -> pd.DataFrame: ...
@@ -287,10 +301,14 @@ class HDF5ScanRunner:
         states: Mapping[str, Dict[str, Any]],
         options: HDF5ScanOptions,
     ) -> None:
+        # prune_orphans=False: other workers may still be mid-write_part() while
+        # this mid-run checkpoint runs (see HDF5ScanTask's docstring).
         for task in tasks:
             state = states[task.name]
             cache_df = task.finalize_cache(state["cache_df"])
-            task.write_cache_and_meta(cache_df, state["processed_files"], options)
+            task.write_cache_and_meta(
+                cache_df, state["processed_files"], options, prune_orphans=False
+            )
 
     def _paths_to_check_for_task(
         self,
@@ -574,7 +592,10 @@ class FeatherMetaCacheMixin:
         cache_df: pd.DataFrame,
         processed_files: Dict[str, Dict[str, Any]],
         options: HDF5ScanOptions,
+        *,
+        prune_orphans: bool = True,
     ) -> None:
+        del prune_orphans  # no orphan-part concept for a single cache file
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_cache_path = self.cache_path.with_suffix(self.cache_path.suffix + ".tmp")
         tmp_meta_path = self.meta_path.with_suffix(self.meta_path.suffix + ".tmp")

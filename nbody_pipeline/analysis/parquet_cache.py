@@ -209,8 +209,18 @@ class ParquetDatasetCacheMixin:
         cache_df: pd.DataFrame,
         processed_files: Dict[str, Dict[str, Any]],
         options: HDF5ScanOptions,
+        *,
+        prune_orphans: bool = True,
     ) -> None:
-        self._prune_orphan_parts(processed_files)
+        # prune_orphans=False during mid-run checkpoints: other workers can still be
+        # mid-write_part() (a fresh tmp/part file not yet in processed_files is not
+        # necessarily an orphan -- see HDF5ScanTask's docstring). Confirmed by a real
+        # crash: a live worker's brand-new tmp file got deleted out from under it by
+        # a concurrent checkpoint's unconditional prune, later manifesting as
+        # os.replace() raising FileNotFoundError for a file this same process had
+        # just finished writing.
+        if prune_orphans:
+            self._prune_orphan_parts(processed_files)
         manifest = {
             "schema_version": self.schema_version,
             "schema_hash": self.table_schema.schema_hash(),
@@ -285,7 +295,10 @@ class ParquetTableCacheMixin:
         cache_df: pd.DataFrame,
         processed_files: Dict[str, Dict[str, Any]],
         options: HDF5ScanOptions,
+        *,
+        prune_orphans: bool = True,
     ) -> None:
+        del prune_orphans  # no orphan-part concept: one merged file, no per-file parts
         self.table_schema.validate_dataframe(cache_df)
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_cache_path = self.cache_path.with_suffix(self.cache_path.suffix + ".tmp")

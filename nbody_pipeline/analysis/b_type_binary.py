@@ -196,10 +196,14 @@ class BTypeBinaryTask(FeatherMetaCacheMixin):
         cache_df: pd.DataFrame,
         processed_files: Dict[str, Dict[str, Any]],
         options: HDF5ScanOptions,
+        *,
+        prune_orphans: bool = True,
     ) -> None:
         last_ttot = self._last_processed_ttot(cache_df, processed_files)
         self._active_cache_path = self._cache_path_for_last_ttot(last_ttot)
-        super().write_cache_and_meta(cache_df, processed_files, options)
+        super().write_cache_and_meta(
+            cache_df, processed_files, options, prune_orphans=prune_orphans
+        )
         for old_path in self._existing_cache_paths():
             if old_path != self._active_cache_path:
                 old_meta = old_path.with_name(old_path.stem + ".meta.json")
