@@ -65,6 +65,9 @@ class OverlapCandidate:
     right: str
     detail: str
     overlapping_ttot: List[float] = field(default_factory=list)
+    # Only set for "directory_range_overlap": the overlapping filename-time window, used to
+    # avoid re-reading every file in what can be a multi-thousand-file run directory.
+    overlap_range: Tuple[float, float] | None = None
 
 
 @dataclass
@@ -161,37 +164,59 @@ def _detect_directory_range_overlaps(files: List[FileReport]) -> List[OverlapCan
                         f"[{dir_b}] [{lo_b:.6f}, {hi_b:.6f}] "
                         f"on [{overlap_lo:.6f}, {overlap_hi:.6f}]"
                     ),
+                    overlap_range=(overlap_lo, overlap_hi),
                 )
             )
     return candidates
 
 
+def _filename_time(path: str) -> float:
+    return float(path.split("snap.40_")[-1].split(".h5part")[0])
+
+
 def _resolve_real_overlap(candidate: OverlapCandidate) -> OverlapCandidate:
-    """Read real TTOT sets for a flagged pair and report the actual overlap (may be empty)."""
-    left_ttots = {info.ttot for info in _read_step_infos(candidate.left)}
-    right_paths = (
-        [candidate.right]
-        if candidate.kind == "duplicate_filename_time"
-        else _sibling_files_in_dir(candidate.right)
-    )
+    """Read real TTOT sets for a flagged pair and report the actual overlap (may be empty).
+
+    ``left``/``right`` are file paths for "duplicate_filename_time" candidates, but
+    *directory* paths for "directory_range_overlap" candidates -- never call
+    _read_step_infos directly on those without first expanding to sibling files.
+    """
+    if candidate.kind == "duplicate_filename_time":
+        left_paths, right_paths = [candidate.left], [candidate.right]
+    else:
+        lo, hi = candidate.overlap_range
+        left_paths = _sibling_files_in_dir(candidate.left, time_range=(lo, hi))
+        right_paths = _sibling_files_in_dir(candidate.right, time_range=(lo, hi))
+
+    left_ttots: set[float] = set()
+    for path in left_paths:
+        left_ttots.update(info.ttot for info in _read_step_infos(path))
     right_ttots: set[float] = set()
     for path in right_paths:
         right_ttots.update(info.ttot for info in _read_step_infos(path))
-    if candidate.kind == "directory_range_overlap":
-        left_ttots = set()
-        for path in _sibling_files_in_dir(candidate.left):
-            left_ttots.update(info.ttot for info in _read_step_infos(path))
-    overlap = sorted(left_ttots & right_ttots)
-    candidate.overlapping_ttot = overlap
+
+    candidate.overlapping_ttot = sorted(left_ttots & right_ttots)
     return candidate
 
 
-def _sibling_files_in_dir(one_file_in_dir: str) -> List[str]:
+def _sibling_files_in_dir(
+    one_file_in_dir: str, *, time_range: Tuple[float, float] | None = None
+) -> List[str]:
+    """h5part files in the same directory as (or, if a directory, inside) ``one_file_in_dir``.
+
+    ``time_range``, if given, restricts to files whose filename time falls in
+    ``[lo, hi]`` -- avoids reading every file in what can be a multi-thousand-file
+    run directory when only a narrow overlap window actually matters.
+    """
     if os.path.isdir(one_file_in_dir):
         directory = one_file_in_dir
     else:
         directory = os.path.dirname(one_file_in_dir)
-    return sorted(str(p) for p in Path(directory).glob("*.h5part"))
+    paths = sorted(str(p) for p in Path(directory).glob("*.h5part"))
+    if time_range is None:
+        return paths
+    lo, hi = time_range
+    return [path for path in paths if lo <= _filename_time(path) <= hi]
 
 
 def _gap_warnings(files: List[FileReport]) -> List[str]:

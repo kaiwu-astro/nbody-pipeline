@@ -418,6 +418,24 @@ _RAW_TABLE_LOGICAL_MAPS = {
 }
 
 
+def read_step_times(hdf5_path: str) -> list[float]:
+    """Return every Step# group's TTOT (its 'Time' attr) without reading any dataset.
+
+    Cheap metadata-only read, shared by scripts/lake_preflight.py and the
+    particle-lake cross-file TTOT dedup (nbody_pipeline.analysis.particle_lake).
+    """
+    times: list[float] = []
+    with h5py.File(hdf5_path, "r") as f:
+        for key in f.keys():
+            if not key.startswith("Step#"):
+                continue
+            try:
+                times.append(float(f[key].attrs["Time"]))
+            except KeyError:
+                continue
+    return times
+
+
 def raw_dataframes_from_hdf5_file(
     hdf5_path: str,
     tables: Sequence[str],

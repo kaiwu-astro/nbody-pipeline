@@ -170,6 +170,29 @@ ordered plan. Items are loosely ordered by dependency.
    analyze --features lake`. See `scripts/lake_preflight.py` for the
    read-only duplicate/overlap check that should run before a
    full-simulation (unsampled, `sample_every_nb_time: null`) rebuild.
+
+   **Cross-file TTOT dedup**: real archived simulations have restart-boundary
+   snapshot duplication -- two consecutive run directories both write the
+   checkpoint at their shared boundary (`scripts/lake_preflight.py` on
+   madnuc's 0sb/20sb/60sb found ~1-8 duplicated TTOT per overlapping
+   directory pair, never a whole duplicated directory). Renaming an entire
+   run directory `*bad*` for this would discard its other, unique snapshots,
+   so dedup instead happens per TTOT, at write time:
+   `ParticleLakeProcessor.build_scan_jobs()` calls
+   `compute_ttot_dedup_exclusions()`, which reads every selected file's
+   `Step#` `Time` attrs (cheap, no dataset reads) and picks the file with the
+   latest mtime as authoritative for each contested TTOT (mtime, not the
+   run-directory's SLURM job ID, since a resubmitted job can have a *lower*
+   job ID than the run it superseded but still finish later). The resulting
+   `{path: {ttot to drop}}` map is passed into
+   `SnapshotSinglesTask`/`SnapshotBinariesTask`/`SnapshotMergersTask`, which
+   drop the loser rows in `_build_rows` before writing their part -- so the
+   Parquet output never contains a duplicate `(simulation_id, ttot,
+   object_id)`. The map is cached at `<lake_dir>/<simu>/ttot_dedup_map.json`,
+   keyed by a hash of the exact file list, so an unchanged incremental
+   `analyze --features lake` run does not re-read every file's attrs.
+   `snapshot_scalars` needs no such mechanism: its `ParquetTableCacheMixin`
+   merge (`replace_ttot_rows`) already deduplicates by TTOT for free.
 6. **VO release export**: a `release/` builder that exports `public: true`
    columns (per the schema registry) to VOTable via `astropy`; unit/UCD
    metadata is already in place by this point.

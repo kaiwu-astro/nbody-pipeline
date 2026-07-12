@@ -18,6 +18,10 @@ single source file's singles table alone can be several GB.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -41,7 +45,7 @@ from nbody_pipeline.analysis.hdf5_scan import (
     replace_ttot_rows,
 )
 from nbody_pipeline.analysis.parquet_cache import ParquetDatasetCacheMixin, ParquetTableCacheMixin
-from nbody_pipeline.io.text_parsers import get_scale_dict_from_hdf5_df
+from nbody_pipeline.io.text_parsers import get_scale_dict_from_hdf5_df, read_step_times
 from nbody_pipeline.schemas import TableSchema, load_table_schema
 
 # zstd + BYTE_STREAM_SPLIT (float-column-friendly bit-splitting, pyarrow >= 8)
@@ -104,6 +108,59 @@ def _distance_pc(x_pc: np.ndarray, y_pc: np.ndarray, z_pc: np.ndarray) -> np.nda
     ).astype("float32")
 
 
+def _drop_excluded_ttot(
+    df: pd.DataFrame, hdf5_path: str, excluded_ttot_by_path: Mapping[str, set[float]]
+) -> pd.DataFrame:
+    """Drop rows whose TTOT lost the cross-file dedup tie-break for this source file."""
+    excluded = excluded_ttot_by_path.get(hdf5_path)
+    if not excluded or df.empty or "TTOT" not in df.columns:
+        return df
+    return df.loc[~df["TTOT"].isin(excluded)]
+
+
+def _file_list_hash(hdf5_paths: Sequence[str]) -> str:
+    payload = "\n".join(sorted(hdf5_paths))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def compute_ttot_dedup_exclusions(
+    hdf5_paths: Sequence[str], read_step_times_fn: Any = read_step_times
+) -> Dict[str, set[float]]:
+    """Resolve cross-file TTOT duplicates: restart-boundary checkpoints that two
+    different run directories both wrote (see scripts/lake_preflight.py's
+    directory_range_overlap/duplicate_filename_time candidates -- this is the
+    write-time fix for those).
+
+    For every TTOT written by more than one file, the file with the latest
+    mtime (ties broken by path) is authoritative. Returns ``{path: {ttot to
+    drop from that file}}`` for every other contributing file; a file that
+    never loses a TTOT to another file has no entry. ``read_step_times_fn``
+    reads only Step# group attrs, never a full dataset -- cheap relative to
+    the actual particle-data read that follows in ``process_file``. Defaults
+    to the free function but callers normally pass
+    ``hdf5_file_processor.read_step_times`` so tests can substitute a fake.
+    """
+    winner_of_ttot: Dict[float, tuple[str, float]] = {}
+    contributors_of_ttot: Dict[float, set[str]] = defaultdict(set)
+    for path in hdf5_paths:
+        mtime = os.path.getmtime(path)
+        for ttot in read_step_times_fn(path):
+            contributors_of_ttot[ttot].add(path)
+            current = winner_of_ttot.get(ttot)
+            if current is None or (mtime, path) > (current[1], current[0]):
+                winner_of_ttot[ttot] = (path, mtime)
+
+    excluded_by_path: Dict[str, set[float]] = defaultdict(set)
+    for ttot, paths in contributors_of_ttot.items():
+        if len(paths) < 2:
+            continue
+        winner_path = winner_of_ttot[ttot][0]
+        for path in paths:
+            if path != winner_path:
+                excluded_by_path[path].add(ttot)
+    return dict(excluded_by_path)
+
+
 class ParticleLakeProcessor(ScanBackedAnalysisBase):
     """Build and cache the full particle lake (4 tables) for one simulation."""
 
@@ -114,10 +171,19 @@ class ParticleLakeProcessor(ScanBackedAnalysisBase):
         four tasks into a single pass over this simulation's HDF5 files.
         """
         options = self._lake_scan_options(force=force)
+        hdf5_paths = self.hdf5_file_processor.get_all_hdf5_paths(
+            simu_name,
+            wait_age_hour=options.wait_age_hour,
+            sample_every_nb_time=options.sample_every_nb_time,
+            exclude_bad_dirname=options.exclude_bad_dirname,
+        )
+        excluded_ttot_by_path = self._load_or_build_ttot_dedup_map(
+            simu_name, hdf5_paths, force=force
+        )
         tasks = [
-            SnapshotSinglesTask(self.config, simu_name),
-            SnapshotBinariesTask(self.config, simu_name),
-            SnapshotMergersTask(self.config, simu_name),
+            SnapshotSinglesTask(self.config, simu_name, excluded_ttot_by_path),
+            SnapshotBinariesTask(self.config, simu_name, excluded_ttot_by_path),
+            SnapshotMergersTask(self.config, simu_name, excluded_ttot_by_path),
             SnapshotScalarsTask(self.config, simu_name),
         ]
         return [HDF5ScanJob(simu_name, task, options) for task in tasks]
@@ -126,6 +192,54 @@ class ParticleLakeProcessor(ScanBackedAnalysisBase):
         lake_config = getattr(self.config, "particle_lake", {}) or {}
         overrides = dict(lake_config.get("scan", {})) if isinstance(lake_config, dict) else {}
         return self._scan_options(force=force, overrides=overrides)
+
+    def _ttot_dedup_cache_path(self, simu_name: str) -> Path:
+        # A simulation-level sidecar (not per-feature): the same dedup map applies to
+        # all three object_rows lake tables built from this simulation's file list.
+        return analysis_cache_dir(self.config, simu_name, SNAPSHOT_SINGLES_FEATURE).parent / (
+            "ttot_dedup_map.json"
+        )
+
+    def _load_or_build_ttot_dedup_map(
+        self, simu_name: str, hdf5_paths: Sequence[str], *, force: bool
+    ) -> Dict[str, set[float]]:
+        """Cache compute_ttot_dedup_exclusions on disk, keyed by the exact file list.
+
+        Recomputing requires reopening every file for a cheap attrs-only read, but
+        that is still real wall-clock time at full-simulation scale (~10^4 files);
+        skip it whenever the file list is unchanged from the last run.
+        """
+        cache_path = self._ttot_dedup_cache_path(simu_name)
+        file_hash = _file_list_hash(hdf5_paths)
+        if not force and cache_path.exists():
+            try:
+                cached = json.loads(cache_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                cached = None
+            if cached is not None and cached.get("file_list_hash") == file_hash:
+                return {
+                    path: set(ttots)
+                    for path, ttots in cached.get("excluded_ttot_by_path", {}).items()
+                }
+
+        excluded_ttot_by_path = compute_ttot_dedup_exclusions(
+            hdf5_paths, self.hdf5_file_processor.read_step_times
+        )
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+        tmp_path.write_text(
+            json.dumps(
+                {
+                    "file_list_hash": file_hash,
+                    "excluded_ttot_by_path": {
+                        path: sorted(ttots) for path, ttots in excluded_ttot_by_path.items()
+                    },
+                },
+                indent=2,
+            )
+        )
+        os.replace(tmp_path, cache_path)
+        return excluded_ttot_by_path
 
     def update(self, simu_name: str, *, force: bool = False) -> Dict[str, pd.DataFrame]:
         """Run all four lake tasks for one simulation, sharing one file read per source file."""
@@ -165,9 +279,15 @@ class SnapshotSinglesTask(ParquetDatasetCacheMixin):
         ],
     }
 
-    def __init__(self, config_manager: Any, simu_name: str) -> None:
+    def __init__(
+        self,
+        config_manager: Any,
+        simu_name: str,
+        excluded_ttot_by_path: Mapping[str, set[float]] | None = None,
+    ) -> None:
         self.config = config_manager
         self.simu_name = simu_name
+        self.excluded_ttot_by_path = excluded_ttot_by_path or {}
 
     @property
     def table_schema(self) -> TableSchema:
@@ -195,6 +315,7 @@ class SnapshotSinglesTask(ParquetDatasetCacheMixin):
     def _build_rows(self, hdf5_path: str, df_dict: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         scalars = df_dict.get("scalars", pd.DataFrame())
         singles = df_dict.get("singles", pd.DataFrame())
+        singles = _drop_excluded_ttot(singles, hdf5_path, self.excluded_ttot_by_path)
         if scalars.empty or singles.empty:
             return self.table_schema.empty_dataframe()
 
@@ -288,9 +409,15 @@ class SnapshotBinariesTask(ParquetDatasetCacheMixin):
         ],
     }
 
-    def __init__(self, config_manager: Any, simu_name: str) -> None:
+    def __init__(
+        self,
+        config_manager: Any,
+        simu_name: str,
+        excluded_ttot_by_path: Mapping[str, set[float]] | None = None,
+    ) -> None:
         self.config = config_manager
         self.simu_name = simu_name
+        self.excluded_ttot_by_path = excluded_ttot_by_path or {}
 
     @property
     def table_schema(self) -> TableSchema:
@@ -318,6 +445,7 @@ class SnapshotBinariesTask(ParquetDatasetCacheMixin):
     def _build_rows(self, hdf5_path: str, df_dict: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         scalars = df_dict.get("scalars", pd.DataFrame())
         binaries = df_dict.get("binaries", pd.DataFrame())
+        binaries = _drop_excluded_ttot(binaries, hdf5_path, self.excluded_ttot_by_path)
         if scalars.empty or binaries.empty:
             return self.table_schema.empty_dataframe()
 
@@ -444,9 +572,15 @@ class SnapshotMergersTask(ParquetDatasetCacheMixin):
         ],
     }
 
-    def __init__(self, config_manager: Any, simu_name: str) -> None:
+    def __init__(
+        self,
+        config_manager: Any,
+        simu_name: str,
+        excluded_ttot_by_path: Mapping[str, set[float]] | None = None,
+    ) -> None:
         self.config = config_manager
         self.simu_name = simu_name
+        self.excluded_ttot_by_path = excluded_ttot_by_path or {}
 
     @property
     def table_schema(self) -> TableSchema:
@@ -474,6 +608,7 @@ class SnapshotMergersTask(ParquetDatasetCacheMixin):
     def _build_rows(self, hdf5_path: str, df_dict: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         scalars = df_dict.get("scalars", pd.DataFrame())
         mergers = df_dict.get("mergers", pd.DataFrame())
+        mergers = _drop_excluded_ttot(mergers, hdf5_path, self.excluded_ttot_by_path)
         if scalars.empty or mergers.empty:
             return self.table_schema.empty_dataframe()
 
@@ -676,4 +811,5 @@ __all__ = [
     "SnapshotBinariesTask",
     "SnapshotMergersTask",
     "SnapshotScalarsTask",
+    "compute_ttot_dedup_exclusions",
 ]

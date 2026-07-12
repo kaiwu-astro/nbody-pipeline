@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -19,6 +20,7 @@ from nbody_pipeline.analysis.particle_lake import (
     SnapshotBinariesTask,
     SnapshotMergersTask,
     SnapshotSinglesTask,
+    compute_ttot_dedup_exclusions,
 )
 from nbody_pipeline.io.text_parsers import SCALAR_KEYS
 from nbody_pipeline.schemas import load_table_schema
@@ -137,6 +139,9 @@ class FakeRawProcessor:
         self.read_count += 1
         self.read_paths.append(hdf5_path)
         return {table: self.tables_by_path[hdf5_path][table] for table in tables}
+
+    def read_step_times(self, hdf5_path):
+        return self.tables_by_path[hdf5_path]["scalars"]["TTOT"].tolist()
 
 
 def _run_lake_tasks(tmp_path: Path, *, ttot: float = 5.0):
@@ -310,3 +315,98 @@ def test_freshness_skips_reprocessing_and_force_rebuilds(tmp_path: Path) -> None
     jobs_forced = lake.build_scan_jobs("sim", force=True)
     runner.run("sim", [job.task for job in jobs_forced], jobs_forced[0].options)
     assert processor.read_count == 2  # force -> full rebuild re-reads the file
+
+
+def test_compute_ttot_dedup_exclusions_prefers_latest_mtime(tmp_path: Path) -> None:
+    path_a = str(tmp_path / "a.h5part")
+    path_b = str(tmp_path / "b.h5part")
+    Path(path_a).write_text("a")
+    Path(path_b).write_text("b")
+    os.utime(path_a, (1000, 1000))
+    os.utime(path_b, (2000, 2000))
+    step_times = {path_a: [1.0, 2.0, 3.0], path_b: [3.0, 4.0]}
+
+    excluded = compute_ttot_dedup_exclusions([path_a, path_b], step_times.get)
+
+    # ttot=3.0 is shared; path_b has the later mtime, so path_a loses it.
+    assert excluded == {path_a: {3.0}}
+
+
+def test_compute_ttot_dedup_exclusions_no_overlap_means_no_exclusions(tmp_path: Path) -> None:
+    path_a = str(tmp_path / "a.h5part")
+    path_b = str(tmp_path / "b.h5part")
+    Path(path_a).write_text("a")
+    Path(path_b).write_text("b")
+    step_times = {path_a: [1.0, 2.0], path_b: [3.0, 4.0]}
+
+    excluded = compute_ttot_dedup_exclusions([path_a, path_b], step_times.get)
+
+    assert excluded == {}
+
+
+def test_dedup_drops_loser_files_duplicate_ttot_rows(tmp_path: Path) -> None:
+    """Two files both claim ttot=5.5 (a restart boundary); the later-mtime file
+    wins and the earlier file's rows for that ttot are dropped from its part,
+    while its unique ttot=5.0 rows are kept."""
+    config = make_config(tmp_path)
+    config.lake_dir_of = {"sim": str(tmp_path / "lake" / "sim")}
+    # sample_every_nb_time must be null (not the global default 1.0) or the
+    # non-integer ttot=5.5 rows used below would be dropped by NB-time sampling
+    # before dedup ever runs -- matches the real particle_lake config sample.
+    config.particle_lake = {"enabled": True, "scan": {"sample_every_nb_time": None}}
+
+    path_old = str(tmp_path / "snap.40_5.0.h5part")
+    path_new = str(tmp_path / "snap.40_5.5.h5part")
+    Path(path_old).write_text("old")
+    Path(path_new).write_text("new")
+    os.utime(path_old, (1000, 1000))
+    os.utime(path_new, (2000, 2000))
+
+    old_singles = pd.concat([_singles_df(5.0), _singles_df(5.5)], ignore_index=True)
+    old_scalars = pd.concat([_scalars_df(5.0), _scalars_df(5.5)], ignore_index=True)
+    new_singles = _singles_df(5.5).copy()
+    new_singles["Name"] = pd.array([101, 102], dtype="int32")
+    new_scalars = _scalars_df(5.5)
+
+    empty = pd.DataFrame()
+    tables = {
+        path_old: {
+            "scalars": old_scalars,
+            "singles": old_singles,
+            "binaries": empty,
+            "mergers": empty,
+        },
+        path_new: {
+            "scalars": new_scalars,
+            "singles": new_singles,
+            "binaries": empty,
+            "mergers": empty,
+        },
+    }
+    processor = FakeRawProcessor([path_old, path_new], tables)
+    lake = ParticleLakeProcessor(config, processor)
+    jobs = lake.build_scan_jobs("sim")
+    runner = HDF5ScanRunner(config, processor)
+    runner.run("sim", [job.task for job in jobs], jobs[0].options)
+
+    data_dir = analysis_cache_dir(config, "sim", SNAPSHOT_SINGLES_FEATURE) / "data"
+    rows = pd.read_parquet(data_dir)
+
+    assert len(rows) == 4
+    assert set(rows.loc[rows["ttot"] == 5.0, "object_id"]) == {1, 2}
+    assert set(rows.loc[rows["ttot"] == 5.5, "object_id"]) == {101, 102}
+    # No duplicate (ttot, object_id) pairs anywhere in the unioned dataset.
+    assert not rows.duplicated(subset=["ttot", "object_id"]).any()
+
+
+def test_ttot_dedup_map_is_cached_and_reused_when_file_list_unchanged(tmp_path: Path) -> None:
+    config, processor, _outputs, _hdf5_path = _run_lake_tasks(tmp_path)
+    lake = ParticleLakeProcessor(config, processor)
+    cache_path = lake._ttot_dedup_cache_path("sim")
+    assert cache_path.exists()
+
+    def _boom(hdf5_path):
+        raise AssertionError("should not recompute dedup map for an unchanged file list")
+
+    processor.read_step_times = _boom
+    lake.build_scan_jobs("sim")  # must reuse the cached map, not call read_step_times

@@ -121,6 +121,19 @@ class HDF5FileProcessor:
             hdf5_path, tables=tables, columns_by_table=columns_by_table
         )
 
+    def read_step_times(self, hdf5_path: str) -> List[float]:
+        """Every Step# group's TTOT for this file, via attrs only (no dataset reads).
+
+        Thin wrapper around ``nbody_pipeline.io.text_parsers.read_step_times``,
+        exposed here (rather than called directly) so callers that need it
+        injected -- e.g. ``ParticleLakeProcessor``'s cross-file TTOT dedup --
+        can substitute a fake processor in tests the same way they already do
+        for ``read_tables``/``read_raw_tables``.
+        """
+        from nbody_pipeline.io.text_parsers import read_step_times
+
+        return read_step_times(hdf5_path)
+
     def _write_df_dict_to_cache(
         self, df_dict: Dict[str, pd.DataFrame], feather_path_of: Dict[str, str]
     ) -> None:
