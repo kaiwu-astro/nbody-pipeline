@@ -235,6 +235,62 @@ ordered plan. Items are loosely ordered by dependency.
      construction -- the final `write_cache_and_meta` call after the main
      `for file_result in file_results` loop has consumed every item `imap`
      will ever yield, so no worker can still be writing.
+
+   **Post-mortem validation after the real full three-simulation build**
+   (row-count conservation: `sum(scalars.n_single/n_binary/n_merger)` vs.
+   actual row counts; uniqueness: `(ttot, object_id[, _2])` duplicates).
+   Two more findings, both from the *earlier, now-fixed* checkpoint/worker
+   race, not from the fix itself:
+   - The repeated crash/retry cycle while landing the fixes above left a
+     small number of stale `processed_files` manifest entries on `0sb`
+     (11-11-10 across singles/binaries/mergers): the entry claimed a part
+     was written, but the part file did not exist on disk (deleted by the
+     pre-fix race in an earlier attempt). `HDF5ScanRunner`'s
+     `incremental_from_cache_tail` optimization
+     (`_paths_to_check_for_task`) trusts `processed_files` membership
+     without re-verifying `is_file_fresh` for anything "before the tail",
+     so these files were silently never retried across four subsequent
+     resumed runs -- ~89M missing singles rows for `0sb` alone.
+     **Recovery** (not a code change; a one-off repair on already-written
+     production output): find `processed_files` entries whose `part` is
+     set but `(data_dir / part).exists()` is `False`, delete those entries,
+     rerun `analyze --features lake` *without* `--force` (only the handful
+     of affected files get reprocessed). This class of corruption should
+     not recur now that mid-run pruning no longer deletes in-flight
+     writes, but the recovery recipe is worth keeping in mind for any
+     future run interrupted by something else (OOM-kill, node failure,
+     `Ctrl-C`).
+   - A rarer, still-open edge case: `compute_ttot_dedup_exclusions` picks
+     its per-TTOT winner by mtime *before* anything has tried to actually
+     read the file, so a corrupted file can win a dedup tie-break it will
+     later fail to honor -- its legitimate competitor's rows get excluded,
+     and the winner itself contributes nothing once
+     `skip_unreadable_files` catches it, netting a silent gap for that
+     TTOT (one occurrence found on `0sb`: TTOT `4230.375`, ~991694 rows,
+     manually repaired by removing the wrongly-excluded competitor's
+     dedup-map entry and its manifest entry, then rerunning
+     incrementally). Not fixed at the code level: `compute_ttot_dedup_exclusions`
+     would need read-failure awareness (e.g. accept a set of known-bad
+     paths, or attempt a cheap-but-deeper readability probe) to pick the
+     next-best contributor automatically. Given this requires *both* a
+     corrupted file *and* that file winning a dedup tie-break, it should
+     stay extremely rare in practice.
+   - A small, still-open, low-impact inconsistency: `snapshot_scalars`
+     dedups by TTOT via `replace_ttot_rows`'s "last file processed wins"
+     (file-processing order, i.e. filename-derived time), while
+     `snapshot_singles`/`binaries`/`mergers` dedup via
+     `compute_ttot_dedup_exclusions`'s "latest mtime wins". For a
+     restart-boundary TTOT with near-but-not-exactly-identical contributing
+     files, these two criteria can disagree, so `scalars.n_single` can
+     differ by a handful of particles from the actual `snapshot_singles`
+     row count for that one TTOT. Measured post-repair residuals (row-count
+     conservation check, `expected - actual`, out of tens of billions of
+     rows): `0sb` singles -2819/binaries -8/mergers 0; `20sb` singles
+     -89/binaries +3/mergers 0; `60sb` singles +18083/binaries +1684/mergers
+     +2 -- all well under 10^-4 % of the total. Fix would be giving
+     `SnapshotScalarsTask` the same `excluded_ttot_by_path` the other three
+     tasks already use, plus a full rebuild of `snapshot_scalars` (cheap:
+     one row per TTOT, not per object) to apply it retroactively.
 6. **VO release export**: a `release/` builder that exports `public: true`
    columns (per the schema registry) to VOTable via `astropy`; unit/UCD
    metadata is already in place by this point.

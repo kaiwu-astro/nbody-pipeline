@@ -57,8 +57,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every mid-run checkpoint and only prunes at the one provably-safe point
   (after every worker's result has been consumed, at the very end of a scan).
   `compact_object_history`/`snapshot_summary`'s feather-backed cache mixins
-  accept and ignore the new parameter (no orphan-part concept there). See
-  `docs/analysis_architecture.md` Roadmap #5.
+  accept and ignore the new parameter (no orphan-part concept there). Full
+  build completed for `0sb`/`20sb`/`60sb` (12689 source files, ~4.6 TiB
+  Parquet output) with post-mortem validation (row-count conservation against
+  `snapshot_scalars.n_single/n_binary/n_merger`, uniqueness of `(ttot,
+  object_id[, _2])`). Two residual, real-archive findings from the repeated
+  crash/retry cycle while landing the fixes above (not from the fixes
+  themselves), both documented in detail in
+  `docs/analysis_architecture.md` Roadmap #5: a small number of stale
+  `processed_files` manifest entries left by the *pre-fix* checkpoint race
+  (repaired by removing entries whose declared part is missing on disk and
+  rerunning incrementally), and one occurrence of a corrupted file winning a
+  cross-file TTOT dedup tie-break it could not honor, silently excluding its
+  valid competitor (repaired by hand for the one affected TTOT; the general
+  case -- `compute_ttot_dedup_exclusions` picking a winner before anything
+  has tried to read it -- remains an open, documented, extremely-rare edge
+  case). A separate, small, still-open inconsistency: `snapshot_scalars`'s
+  TTOT dedup (`replace_ttot_rows`, "last file processed wins") can disagree
+  with the other three tables' (`compute_ttot_dedup_exclusions`, "latest
+  mtime wins") for restart-boundary TTOTs with near-but-not-identical
+  contributing files; measured impact after the repairs above is under
+  10^-4 % of total rows in all three simulations.
 - `HDF5FileProcessor.read_raw_tables` / `nbody_pipeline.io.text_parsers.raw_dataframes_from_hdf5_file`:
   an h5py-level raw HDF5 reader (column-projected, source dtypes preserved, no L1
   feather cache writes) for `HDF5ScanTask`s that declare `hdf5_reader_kind = "raw"`.
