@@ -9,17 +9,24 @@ repos:
       - id: check-merge-conflict
       - id: detect-private-key
 
-  - repo: https://github.com/psf/black
-    rev: 26.1.0
+  - repo: local
     hooks:
       - id: black
-        language_version: python3.13
+        name: black
+        entry: black
+        language: system
+        types: [python]
         args: ['--line-length=100']
-        # black 26.1.0 needs pathspec's post-1.0 API (pathspec.patterns.gitignore);
-        # pin it explicitly so pre-commit's isolated hook env doesn't resolve an
-        # older/incompatible pathspec that crashes the hook with
-        # "ModuleNotFoundError: No module named 'pathspec.patterns.gitignore'".
-        additional_dependencies: ['pathspec>=1.0.0,<2']
+        # Runs black from the currently active project venv instead of
+        # pre-commit's own isolated hook venv. On this HPC, Lmod's PYTHONPATH
+        # injection shadows whatever pathspec/click/etc. pip installs into an
+        # isolated venv with an older module-provided copy, which crashes
+        # black with "ModuleNotFoundError: No module named
+        # 'pathspec.patterns.gitignore'" no matter what additional_dependencies
+        # pins. The project venv carries a sitecustomize.py that reorders
+        # sys.path so its own site-packages wins over PYTHONPATH, so its black
+        # works correctly; `language: system` just reuses that fix instead of
+        # re-fighting it inside a throwaway venv.
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.14
