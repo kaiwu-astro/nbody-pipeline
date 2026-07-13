@@ -22,6 +22,13 @@ from nbody_pipeline.analysis.snapshot_summary import (
     SnapshotSummaryProcessor,
     SnapshotSummaryTask,
 )
+from nbody_pipeline.analysis.particle_lake import (
+    ParticleLakeProcessor,
+    SnapshotSinglesTask,
+    SnapshotBinariesTask,
+    SnapshotMergersTask,
+    SnapshotScalarsTask,
+)
 from nbody_pipeline.analysis.physics import (
     tau_gw,
     compute_binary_orbit_relative_positions,
@@ -43,6 +50,11 @@ __all__ = [
     "CompactObjectHistoryTask",
     "SnapshotSummaryProcessor",
     "SnapshotSummaryTask",
+    "ParticleLakeProcessor",
+    "SnapshotSinglesTask",
+    "SnapshotBinariesTask",
+    "SnapshotMergersTask",
+    "SnapshotScalarsTask",
     "tau_gw",
     "compute_binary_orbit_relative_positions",
     "compute_individual_orbit_params",

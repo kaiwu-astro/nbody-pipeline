@@ -1,0 +1,426 @@
+table: snapshot_mergers
+version: 1
+description: >
+  Per-snapshot rows for every merger/collision event recorded at that TTOT (one row per
+  Mer NAMC per TTOT), raw-value columns only, all source columns kept. See
+  docs/analysis_architecture.md Roadmap #5.
+columns:
+  - name: simulation_id
+    dtype: string
+    unit: null
+    ucd: meta.id
+    description: Simulation config key this row belongs to (e.g. "20sb").
+    public: true
+    nullable: false
+  - name: ttot
+    dtype: float64
+    unit: null
+    ucd: time.epoch
+    description: Simulation time in N-body units.
+    public: true
+    nullable: false
+  - name: time_myr
+    dtype: float64
+    unit: Myr
+    ucd: time.epoch
+    description: Simulation time in megayears.
+    public: true
+    nullable: false
+  - name: object_id_1
+    dtype: int64
+    unit: null
+    ucd: meta.id
+    description: First parent member identifier (raw HDF5 Mer NAM1).
+    public: true
+    nullable: false
+  - name: object_id_2
+    dtype: int64
+    unit: null
+    ucd: meta.id
+    description: Second parent member identifier (raw HDF5 Mer NAM2).
+    public: true
+    nullable: false
+  - name: object_id_3
+    dtype: int64
+    unit: null
+    ucd: meta.id
+    description: >
+      Third parent member identifier, if a hierarchical triple was involved (raw HDF5 Mer
+      NAM3).
+    public: true
+    nullable: false
+  - name: cm_id
+    dtype: int64
+    unit: null
+    ucd: meta.id
+    description: >
+      Merger product / center-of-mass identifier (raw HDF5 Mer NAMC), assigned by the
+      caller in NBODY6++GPU's custom_store_binary routine -- a numbering scheme
+      independent of snapshot_binaries.cm_id (see that column's description for a
+      confirmed cross-scheme collision NBODY6++GPU has between KS-pair and wide-binary
+      cm names; whether mergers' NCM scheme is similarly collision-prone was not
+      exhaustively verified). Prefer (object_id_1, object_id_2, object_id_3) if a
+      per-snapshot unique key is needed.
+    public: true
+    nullable: false
+  - name: kw_1
+    dtype: int32
+    unit: null
+    ucd: src.class
+    description: First parent stellar type (raw HDF5 Mer KW1).
+    public: true
+    nullable: false
+  - name: kw_2
+    dtype: int32
+    unit: null
+    ucd: src.class
+    description: Second parent stellar type (raw HDF5 Mer KW2).
+    public: true
+    nullable: false
+  - name: kw_3
+    dtype: int32
+    unit: null
+    ucd: src.class
+    description: Third parent stellar type, if any (raw HDF5 Mer KW3).
+    public: true
+    nullable: false
+  - name: cm_kw
+    dtype: int32
+    unit: null
+    ucd: src.class
+    description: Merger product stellar type (raw HDF5 Mer KWC).
+    public: true
+    nullable: false
+  - name: mass_1_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: First parent mass (raw HDF5 Mer M1).
+    public: true
+    nullable: false
+  - name: mass_2_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: Second parent mass (raw HDF5 Mer M2).
+    public: true
+    nullable: false
+  - name: mass_3_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: Third parent mass, if any (raw HDF5 Mer M3).
+    public: true
+    nullable: false
+  - name: cm_x_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.x
+    description: >
+      Center-of-mass X position. Density-center-corrected position in parsecs: raw HDF5
+      value minus (RDENS x RBAR) from the same snapshot's scalars row (see
+      snapshot_scalars.rdens_*_nb and rbar_pc).
+    public: true
+    nullable: false
+  - name: cm_y_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.y
+    description: >
+      Center-of-mass Y position. Density-center-corrected position in parsecs: raw HDF5
+      value minus (RDENS x RBAR) from the same snapshot's scalars row (see
+      snapshot_scalars.rdens_*_nb and rbar_pc).
+    public: true
+    nullable: false
+  - name: cm_z_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.z
+    description: >
+      Center-of-mass Z position. Density-center-corrected position in parsecs: raw HDF5
+      value minus (RDENS x RBAR) from the same snapshot's scalars row (see
+      snapshot_scalars.rdens_*_nb and rbar_pc).
+    public: true
+    nullable: false
+  - name: cm_vx_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.x
+    description: Center-of-mass X velocity (raw HDF5 Mer VC1).
+    public: true
+    nullable: false
+  - name: cm_vy_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.y
+    description: Center-of-mass Y velocity (raw HDF5 Mer VC2).
+    public: true
+    nullable: false
+  - name: cm_vz_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.z
+    description: Center-of-mass Z velocity (raw HDF5 Mer VC3).
+    public: true
+    nullable: false
+  - name: rel0_x_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.x
+    description: Inner-orbit relative X position, at merger time (raw HDF5 Mer XR01).
+    public: true
+    nullable: false
+  - name: rel0_y_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.y
+    description: Inner-orbit relative Y position, at merger time (raw HDF5 Mer XR02).
+    public: true
+    nullable: false
+  - name: rel0_z_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.z
+    description: Inner-orbit relative Z position, at merger time (raw HDF5 Mer XR03).
+    public: true
+    nullable: false
+  - name: rel0_vx_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.x
+    description: Inner-orbit relative X velocity, at merger time (raw HDF5 Mer VR01).
+    public: true
+    nullable: false
+  - name: rel0_vy_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.y
+    description: Inner-orbit relative Y velocity, at merger time (raw HDF5 Mer VR02).
+    public: true
+    nullable: false
+  - name: rel0_vz_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.z
+    description: Inner-orbit relative Z velocity, at merger time (raw HDF5 Mer VR03).
+    public: true
+    nullable: false
+  - name: rel1_x_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.x
+    description: >
+      Outer-orbit relative X position, if a hierarchical triple was involved (raw HDF5 Mer
+      XR11).
+    public: true
+    nullable: false
+  - name: rel1_y_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.y
+    description: >
+      Outer-orbit relative Y position, if a hierarchical triple was involved (raw HDF5 Mer
+      XR12).
+    public: true
+    nullable: false
+  - name: rel1_z_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.z
+    description: >
+      Outer-orbit relative Z position, if a hierarchical triple was involved (raw HDF5 Mer
+      XR13).
+    public: true
+    nullable: false
+  - name: rel1_vx_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.x
+    description: >
+      Outer-orbit relative X velocity, if a hierarchical triple was involved (raw HDF5 Mer
+      VR11).
+    public: true
+    nullable: false
+  - name: rel1_vy_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.y
+    description: >
+      Outer-orbit relative Y velocity, if a hierarchical triple was involved (raw HDF5 Mer
+      VR12).
+    public: true
+    nullable: false
+  - name: rel1_vz_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.z
+    description: >
+      Outer-orbit relative Z velocity, if a hierarchical triple was involved (raw HDF5 Mer
+      VR13).
+    public: true
+    nullable: false
+  - name: cm_pot_nb
+    dtype: float32
+    unit: null
+    ucd: phys.energy
+    description: >
+      Gravitational potential at the merger center of mass, in N-body units (raw HDF5 Mer
+      POT).
+    public: true
+    nullable: false
+  - name: radius_1_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: First parent stellar radius (raw HDF5 Mer RS1).
+    public: true
+    nullable: false
+  - name: radius_2_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: Second parent stellar radius (raw HDF5 Mer RS2).
+    public: true
+    nullable: false
+  - name: radius_3_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: Third parent stellar radius, if any (raw HDF5 Mer RS3).
+    public: true
+    nullable: false
+  - name: luminosity_1_lsun
+    dtype: float32
+    unit: solLum
+    ucd: phys.luminosity
+    description: First parent luminosity (raw HDF5 Mer L1).
+    public: true
+    nullable: false
+  - name: luminosity_2_lsun
+    dtype: float32
+    unit: solLum
+    ucd: phys.luminosity
+    description: Second parent luminosity (raw HDF5 Mer L2).
+    public: true
+    nullable: false
+  - name: luminosity_3_lsun
+    dtype: float32
+    unit: solLum
+    ucd: phys.luminosity
+    description: Third parent luminosity, if any (raw HDF5 Mer L3).
+    public: true
+    nullable: false
+  - name: teff_1_k
+    dtype: float32
+    unit: K
+    ucd: phys.temperature.effective
+    description: First parent effective temperature (raw HDF5 Mer TE1).
+    public: true
+    nullable: false
+  - name: teff_2_k
+    dtype: float32
+    unit: K
+    ucd: phys.temperature.effective
+    description: Second parent effective temperature (raw HDF5 Mer TE2).
+    public: true
+    nullable: false
+  - name: teff_3_k
+    dtype: float32
+    unit: K
+    ucd: phys.temperature.effective
+    description: Third parent effective temperature, if any (raw HDF5 Mer TE3).
+    public: true
+    nullable: false
+  - name: core_radius_1_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: First parent stellar core radius (raw HDF5 Mer RC1).
+    public: true
+    nullable: false
+  - name: core_radius_2_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: Second parent stellar core radius (raw HDF5 Mer RC2).
+    public: true
+    nullable: false
+  - name: core_radius_3_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: Third parent stellar core radius, if any (raw HDF5 Mer RC3).
+    public: true
+    nullable: false
+  - name: core_mass_1_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: First parent stellar core mass (raw HDF5 Mer MC1).
+    public: true
+    nullable: false
+  - name: core_mass_2_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: Second parent stellar core mass (raw HDF5 Mer MC2).
+    public: true
+    nullable: false
+  - name: core_mass_3_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: Third parent stellar core mass, if any (raw HDF5 Mer MC3).
+    public: true
+    nullable: false
+  - name: semi_major_axis_0_au
+    dtype: float32
+    unit: AU
+    ucd: phys.size.smajAxis
+    description: Inner-orbit semi-major axis, before merger (raw HDF5 Mer A0[au]).
+    public: true
+    nullable: false
+  - name: eccentricity_0
+    dtype: float32
+    unit: null
+    ucd: src.orbital.eccentricity
+    description: Inner-orbit eccentricity, before merger (raw HDF5 Mer ECC0).
+    public: true
+    nullable: false
+  - name: period_0_days
+    dtype: float32
+    unit: d
+    ucd: time.period
+    description: Inner-orbit period, before merger (raw HDF5 Mer P0[d]).
+    public: true
+    nullable: false
+  - name: semi_major_axis_1_au
+    dtype: float32
+    unit: AU
+    ucd: phys.size.smajAxis
+    description: >
+      Outer-orbit semi-major axis, if a hierarchical triple was involved (raw HDF5 Mer
+      A1[au]).
+    public: true
+    nullable: false
+  - name: eccentricity_1
+    dtype: float32
+    unit: null
+    ucd: src.orbital.eccentricity
+    description: Outer-orbit eccentricity, if a hierarchical triple was involved (raw HDF5 Mer ECC1).
+    public: true
+    nullable: false
+  - name: period_1_days
+    dtype: float32
+    unit: d
+    ucd: time.period
+    description: Outer-orbit period, if a hierarchical triple was involved (raw HDF5 Mer P1[d]).
+    public: true
+    nullable: false
+  - name: source_hdf5_path
+    dtype: string
+    unit: null
+    ucd: meta.ref.url
+    description: Absolute path of the source HDF5 file this row was derived from (provenance only).
+    public: false
+    nullable: false

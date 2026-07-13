@@ -15,9 +15,11 @@ from nbody_pipeline.analysis.hdf5_scan import (
     default_file_meta,
     replace_ttot_rows,
 )
+from nbody_pipeline.analysis import parquet_cache
 from nbody_pipeline.analysis.parquet_cache import (
     ParquetDatasetCacheMixin,
     ParquetTableCacheMixin,
+    _replace_with_retry,
 )
 from nbody_pipeline.schemas import ColumnSchema, SchemaValidationError, TableSchema
 from tests.test_hdf5_scan import FailingProcessor, FakeProcessor, FileBackedTask, make_config
@@ -257,6 +259,35 @@ def test_dataset_cache_prunes_orphan_parts_and_tmp_files(tmp_path: Path) -> None
     assert "part-orphan-deadbeef.parquet.tmp" not in remaining
 
 
+def test_write_cache_and_meta_prune_orphans_false_keeps_unreferenced_files(
+    tmp_path: Path,
+) -> None:
+    """Regression test for a real crash: a mid-run checkpoint's unconditional prune
+    deleted another worker's brand-new, not-yet-referenced tmp/part file out from
+    under it. prune_orphans=False (what the runner now passes for every mid-run
+    checkpoint) must leave unreferenced .tmp/.parquet files alone."""
+    config = make_config(tmp_path)
+    paths, tables = _make_files(tmp_path, 1)
+    cache_dir = tmp_path / "cache" / "feature"
+    task = FakeDatasetTask(cache_dir)
+    HDF5ScanRunner(config, FakeProcessor(paths, tables)).run(
+        "sim", [task], HDF5ScanOptions(wait_age_hour=0)
+    )
+    # Simulate another worker mid-write_part() for a different file at the moment
+    # this checkpoint runs: a fresh tmp file and a fresh, not-yet-reported part.
+    (task.data_dir / "part-inflight-cafef00d.parquet.tmp").write_bytes(b"still writing")
+    (task.data_dir / "part-inflight-cafef00d.parquet").write_bytes(b"just replaced")
+
+    manifest = json.loads(task.manifest_path.read_text())
+    task.write_cache_and_meta(
+        task.read_cache(), manifest["processed_files"], HDF5ScanOptions(), prune_orphans=False
+    )
+
+    remaining = {p.name for p in task.data_dir.iterdir()}
+    assert "part-inflight-cafef00d.parquet.tmp" in remaining
+    assert "part-inflight-cafef00d.parquet" in remaining
+
+
 def test_dataset_cache_mid_run_exception_keeps_manifest_consistent(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     paths, tables = _make_files(tmp_path, 2)
@@ -362,3 +393,123 @@ def test_feather_and_parquet_tasks_share_one_read_per_file(tmp_path: Path) -> No
     assert processor.read_count == 1
     assert (tmp_path / "feather_cache" / "feather_task.feather").exists()
     assert list((tmp_path / "cache" / "feature" / "data").glob("*.parquet"))
+
+
+class FakeCompressedDatasetTask(FakeDatasetTask):
+    """A dataset task overriding parquet_write_options, like the lake tasks."""
+
+    @property
+    def parquet_write_options(self):
+        return {"compression": "zstd", "use_byte_stream_split": True, "row_group_size": 2}
+
+
+def test_write_part_applies_parquet_write_options(tmp_path: Path) -> None:
+    import pyarrow.parquet as pq
+
+    config = make_config(tmp_path)
+    paths, tables = _make_files(tmp_path, 1)
+    task = FakeCompressedDatasetTask(tmp_path / "cache" / "feature")
+    runner = HDF5ScanRunner(config, FakeProcessor(paths, tables))
+
+    runner.run("sim", [task], HDF5ScanOptions(wait_age_hour=0))
+
+    (part_path,) = task.data_dir.glob("*.parquet")
+    parquet_file = pq.ParquetFile(part_path)
+    metadata = parquet_file.metadata
+    assert metadata.row_group(0).column(0).compression.upper() == "ZSTD"
+    read_back = pd.read_parquet(part_path)
+    pd.testing.assert_frame_equal(read_back.reset_index(drop=True), pd.read_parquet(part_path))
+
+
+def test_default_parquet_write_options_are_empty(tmp_path: Path) -> None:
+    task = FakeDatasetTask(tmp_path / "cache" / "feature")
+    assert task.parquet_write_options == {}
+
+
+def test_replace_with_retry_succeeds_after_transient_file_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "src.tmp"
+    dst = tmp_path / "dst.parquet"
+    src.write_text("data")
+
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(a, b):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise FileNotFoundError(f"transient: {a}")
+        return real_replace(a, b)
+
+    monkeypatch.setattr(parquet_cache.os, "replace", flaky_replace)
+    monkeypatch.setattr(parquet_cache.time, "sleep", lambda _seconds: None)
+
+    _replace_with_retry(src, dst, attempts=5, base_delay=0.0)
+
+    assert calls["n"] == 3
+    assert dst.read_text() == "data"
+
+
+def test_replace_with_retry_raises_after_exhausting_attempts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "src.tmp"
+    dst = tmp_path / "dst.parquet"
+
+    def always_fails(a, b):
+        raise FileNotFoundError(f"gone: {a}")
+
+    monkeypatch.setattr(parquet_cache.os, "replace", always_fails)
+    monkeypatch.setattr(parquet_cache.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(FileNotFoundError, match="gone"):
+        _replace_with_retry(src, dst, attempts=3, base_delay=0.0)
+
+
+class WorkerDirectWriteDatasetTask(FakeDatasetTask):
+    """process_file calls write_part itself and returns the 'part' shape."""
+
+    def process_file(self, hdf5_path, df_dict, meta, cache_df):
+        ttots = df_dict["scalars"]["TTOT"].tolist()
+        rows = _rows(hdf5_path, ttots, float(len(hdf5_path)))
+        part_meta = self.write_part(hdf5_path, rows)
+        return {**part_meta, "file_meta": default_file_meta(hdf5_path, df_dict)}
+
+
+def test_merge_file_result_accepts_worker_direct_write_shape(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    paths, tables = _make_files(tmp_path, 2)
+    task = WorkerDirectWriteDatasetTask(tmp_path / "cache" / "feature")
+    runner = HDF5ScanRunner(config, FakeProcessor(paths, tables))
+
+    runner.run("sim", [task], HDF5ScanOptions(wait_age_hour=0))
+
+    combined = pd.read_parquet(task.data_dir)
+    assert sorted(combined["ttot"].tolist()) == [0.0, 1.0]
+    manifest = json.loads(task.manifest_path.read_text())
+    assert all(entry.get("part") for entry in manifest["processed_files"].values())
+    assert all(entry.get("row_count") == 1 for entry in manifest["processed_files"].values())
+
+
+def test_merge_file_result_rows_and_part_shapes_produce_identical_manifests(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    paths, tables = _make_files(tmp_path, 1)
+
+    rows_task = FakeDatasetTask(tmp_path / "cache" / "rows")
+    HDF5ScanRunner(config, FakeProcessor(paths, tables)).run(
+        "sim", [rows_task], HDF5ScanOptions(wait_age_hour=0)
+    )
+    part_task = WorkerDirectWriteDatasetTask(tmp_path / "cache" / "part")
+    HDF5ScanRunner(config, FakeProcessor(paths, tables)).run(
+        "sim", [part_task], HDF5ScanOptions(wait_age_hour=0)
+    )
+
+    rows_meta = json.loads(rows_task.manifest_path.read_text())["processed_files"]
+    part_meta = json.loads(part_task.manifest_path.read_text())["processed_files"]
+    for path in paths:
+        assert rows_meta[path]["row_count"] == part_meta[path]["row_count"]
+        assert rows_meta[path]["ttot_min"] == part_meta[path]["ttot_min"]
+        assert rows_meta[path]["ttot_max"] == part_meta[path]["ttot_max"]

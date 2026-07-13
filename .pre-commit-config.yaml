@@ -15,6 +15,11 @@ repos:
       - id: black
         language_version: python3.13
         args: ['--line-length=100']
+        # black 26.1.0 needs pathspec's post-1.0 API (pathspec.patterns.gitignore);
+        # pin it explicitly so pre-commit's isolated hook env doesn't resolve an
+        # older/incompatible pathspec that crashes the hook with
+        # "ModuleNotFoundError: No module named 'pathspec.patterns.gitignore'".
+        additional_dependencies: ['pathspec>=1.0.0,<2']
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.14

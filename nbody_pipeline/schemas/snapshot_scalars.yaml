@@ -1,0 +1,578 @@
+table: snapshot_scalars
+version: 1
+description: >
+  One row per snapshot (TTOT) per simulation, covering every valid slot of the raw HDF5
+  000 Scalars array (slots 71-100 are unused/always-zero in the source data and are not
+  included here). See docs/analysis_architecture.md Roadmap #5.
+columns:
+  - name: simulation_id
+    dtype: string
+    unit: null
+    ucd: meta.id
+    description: Simulation config key this row belongs to (e.g. "20sb").
+    public: true
+    nullable: false
+  - name: ttot
+    dtype: float64
+    unit: null
+    ucd: time.epoch
+    description: Simulation time in N-body units.
+    public: true
+    nullable: false
+  - name: time_myr
+    dtype: float64
+    unit: Myr
+    ucd: time.epoch
+    description: Simulation time in megayears.
+    public: true
+    nullable: false
+  - name: npairs
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Number of KS-regularized pairs (raw HDF5 NPAIRS).
+    public: true
+    nullable: false
+  - name: rbar_pc
+    dtype: float64
+    unit: pc
+    ucd: phys.size.radius
+    description: >
+      N-body length unit expressed in parsecs (raw HDF5 RBAR); the scale factor used to
+      convert other *_nb columns to pc.
+    public: true
+    nullable: false
+  - name: zmbar_msun
+    dtype: float64
+    unit: solMass
+    ucd: phys.mass
+    description: N-body mass unit expressed in solar masses (raw HDF5 ZMBAR).
+    public: true
+    nullable: false
+  - name: n
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Total particle count (raw HDF5 N).
+    public: true
+    nullable: false
+  - name: tstar_myr
+    dtype: float64
+    unit: Myr
+    ucd: time.duration
+    description: Stellar-evolution time unit expressed in megayears (raw HDF5 TSTAR).
+    public: true
+    nullable: false
+  - name: rdens_x_nb
+    dtype: float64
+    unit: null
+    ucd: pos.cartesian.x
+    description: >
+      Density-center X position, N-body units (raw HDF5 RDENS(1)). Raw N-body-unit value;
+      multiply by rbar_pc for parsecs.
+    public: true
+    nullable: false
+  - name: rdens_y_nb
+    dtype: float64
+    unit: null
+    ucd: pos.cartesian.y
+    description: >
+      Density-center Y position, N-body units (raw HDF5 RDENS(2)). Raw N-body-unit value;
+      multiply by rbar_pc for parsecs.
+    public: true
+    nullable: false
+  - name: rdens_z_nb
+    dtype: float64
+    unit: null
+    ucd: pos.cartesian.z
+    description: >
+      Density-center Z position, N-body units (raw HDF5 RDENS(3)). Raw N-body-unit value;
+      multiply by rbar_pc for parsecs.
+    public: true
+    nullable: false
+  - name: ttot_over_tcr0
+    dtype: float64
+    unit: null
+    ucd: arith.ratio
+    description: Simulation time in units of the initial crossing time (raw HDF5 TTOT/TCR0).
+    public: true
+    nullable: false
+  - name: tscale_myr
+    dtype: float64
+    unit: Myr
+    ucd: time.duration
+    description: N-body time unit expressed in megayears (raw HDF5 TSCALE); time_myr = ttot x tscale_myr.
+    public: true
+    nullable: false
+  - name: vstar_kms
+    dtype: float64
+    unit: km/s
+    ucd: phys.veloc
+    description: N-body velocity unit expressed in km/s (raw HDF5 VSTAR).
+    public: true
+    nullable: false
+  - name: rc_nb
+    dtype: float64
+    unit: null
+    ucd: phys.size.radius
+    description: >
+      Core radius, N-body units (raw HDF5 RC). Raw N-body-unit value; multiply by rbar_pc
+      for parsecs.
+    public: true
+    nullable: false
+  - name: nc
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Number of stars in the density-center core (raw HDF5 NC).
+    public: true
+    nullable: false
+  - name: vc_nb
+    dtype: float64
+    unit: null
+    ucd: phys.veloc
+    description: Core velocity dispersion, N-body units (raw HDF5 VC).
+    public: true
+    nullable: false
+  - name: rhom_nb
+    dtype: float64
+    unit: null
+    ucd: phys.density
+    description: Core density, N-body units (raw HDF5 RHOM).
+    public: true
+    nullable: false
+  - name: cmax
+    dtype: float64
+    unit: null
+    ucd: meta.number
+    description: >
+      Internal integrator diagnostic (raw HDF5 CMAX); see NBODY6++GPU source for exact
+      semantics.
+    public: true
+    nullable: false
+  - name: rscale_nb
+    dtype: float64
+    unit: null
+    ucd: phys.size.radius
+    description: >
+      Scale radius, N-body units (raw HDF5 RSCALE). Raw N-body-unit value; multiply by
+      rbar_pc for parsecs.
+    public: true
+    nullable: false
+  - name: rsmin_nb
+    dtype: float64
+    unit: null
+    ucd: phys.size.radius
+    description: >
+      Minimum scale radius, N-body units (raw HDF5 RSMIN). Raw N-body-unit value; multiply
+      by rbar_pc for parsecs.
+    public: true
+    nullable: false
+  - name: dmin1_nb
+    dtype: float64
+    unit: null
+    ucd: pos.distance
+    description: >
+      Minimum two-body separation, N-body units (raw HDF5 DMIN1). Raw N-body-unit value;
+      multiply by rbar_pc for parsecs.
+    public: true
+    nullable: false
+  - name: rg_x_pc
+    dtype: float64
+    unit: pc
+    ucd: pos.cartesian.x
+    description: Galactocentric X position (raw HDF5 RG(1), already pc).
+    public: true
+    nullable: false
+  - name: rg_y_pc
+    dtype: float64
+    unit: pc
+    ucd: pos.cartesian.y
+    description: Galactocentric Y position (raw HDF5 RG(2), already pc).
+    public: true
+    nullable: false
+  - name: rg_z_pc
+    dtype: float64
+    unit: pc
+    ucd: pos.cartesian.z
+    description: Galactocentric Z position (raw HDF5 RG(3), already pc).
+    public: true
+    nullable: false
+  - name: vg_x_kmps
+    dtype: float64
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.x
+    description: Galactocentric X velocity (raw HDF5 VG(1), already km/s).
+    public: true
+    nullable: false
+  - name: vg_y_kmps
+    dtype: float64
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.y
+    description: Galactocentric Y velocity (raw HDF5 VG(2), already km/s).
+    public: true
+    nullable: false
+  - name: vg_z_kmps
+    dtype: float64
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.z
+    description: Galactocentric Z velocity (raw HDF5 VG(3), already km/s).
+    public: true
+    nullable: false
+  - name: tidal_1
+    dtype: float64
+    unit: null
+    ucd: phys.gravity
+    description: Galactic tidal field coefficient 1 (raw HDF5 TIDAL(1)).
+    public: true
+    nullable: false
+  - name: tidal_2
+    dtype: float64
+    unit: null
+    ucd: phys.gravity
+    description: Galactic tidal field coefficient 2 (raw HDF5 TIDAL(2)).
+    public: true
+    nullable: false
+  - name: tidal_3
+    dtype: float64
+    unit: null
+    ucd: phys.gravity
+    description: Galactic tidal field coefficient 3 (raw HDF5 TIDAL(3)).
+    public: true
+    nullable: false
+  - name: tidal_4
+    dtype: float64
+    unit: null
+    ucd: phys.gravity
+    description: Galactic tidal field coefficient 4 (raw HDF5 TIDAL(4)).
+    public: true
+    nullable: false
+  - name: gmg
+    dtype: float64
+    unit: null
+    ucd: phys.mass
+    description: Galactic mass parameter (raw HDF5 GMG).
+    public: true
+    nullable: false
+  - name: omega
+    dtype: float64
+    unit: null
+    ucd: phys.angVelocity
+    description: Galactic angular velocity (raw HDF5 OMEGA).
+    public: true
+    nullable: false
+  - name: disk
+    dtype: float64
+    unit: null
+    ucd: phys.gravity
+    description: Galactic disk potential parameter (raw HDF5 DISK).
+    public: true
+    nullable: false
+  - name: disk_a
+    dtype: float64
+    unit: null
+    ucd: phys.gravity
+    description: Galactic disk potential scale parameter a (raw HDF5 A).
+    public: true
+    nullable: false
+  - name: disk_b
+    dtype: float64
+    unit: null
+    ucd: phys.gravity
+    description: Galactic disk potential scale parameter b (raw HDF5 B).
+    public: true
+    nullable: false
+  - name: zmet
+    dtype: float64
+    unit: null
+    ucd: phys.abund.Z
+    description: Metallicity used by the stellar-evolution recipes (raw HDF5 ZMET).
+    public: true
+    nullable: false
+  - name: zpars_1
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 1 (raw HDF5 ZPARS(1)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_2
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 2 (raw HDF5 ZPARS(2)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_3
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 3 (raw HDF5 ZPARS(3)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_4
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 4 (raw HDF5 ZPARS(4)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_5
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 5 (raw HDF5 ZPARS(5)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_6
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 6 (raw HDF5 ZPARS(6)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_7
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 7 (raw HDF5 ZPARS(7)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_8
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 8 (raw HDF5 ZPARS(8)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_9
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 9 (raw HDF5 ZPARS(9)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_10
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 10 (raw HDF5 ZPARS(10)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_11
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 11 (raw HDF5 ZPARS(11)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_12
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 12 (raw HDF5 ZPARS(12)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_13
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 13 (raw HDF5 ZPARS(13)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_14
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 14 (raw HDF5 ZPARS(14)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_15
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 15 (raw HDF5 ZPARS(15)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_16
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 16 (raw HDF5 ZPARS(16)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_17
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 17 (raw HDF5 ZPARS(17)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_18
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 18 (raw HDF5 ZPARS(18)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_19
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 19 (raw HDF5 ZPARS(19)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: zpars_20
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: >
+      SSE/BSE metallicity-dependent coefficient 20 (raw HDF5 ZPARS(20)); see Hurley et al.
+      2000/2002.
+    public: true
+    nullable: false
+  - name: etai
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: Irregular-force timestep accuracy parameter (raw HDF5 ETAI).
+    public: true
+    nullable: false
+  - name: etar
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: Regular-force timestep accuracy parameter (raw HDF5 ETAR).
+    public: true
+    nullable: false
+  - name: etau
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: Unperturbed-orbit timestep accuracy parameter (raw HDF5 ETAU).
+    public: true
+    nullable: false
+  - name: eclose_nb
+    dtype: float64
+    unit: null
+    ucd: phys.energy
+    description: Hard-binary binding-energy threshold, N-body units (raw HDF5 ECLOSE).
+    public: true
+    nullable: false
+  - name: dtmin_nb
+    dtype: float64
+    unit: null
+    ucd: time.interval
+    description: Minimum integration timestep, N-body units (raw HDF5 DTMIN).
+    public: true
+    nullable: false
+  - name: rmin_nb
+    dtype: float64
+    unit: null
+    ucd: pos.distance
+    description: >
+      Minimum two-body distance for regularization, N-body units (raw HDF5 RMIN). Raw
+      N-body-unit value; multiply by rbar_pc for parsecs.
+    public: true
+    nullable: false
+  - name: gmin
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: Minimum relative perturbation for KS termination (raw HDF5 GMIN).
+    public: true
+    nullable: false
+  - name: gmax
+    dtype: float64
+    unit: null
+    ucd: meta.code
+    description: Maximum relative perturbation for KS initiation (raw HDF5 GMAX).
+    public: true
+    nullable: false
+  - name: smax
+    dtype: float64
+    unit: null
+    ucd: time.interval
+    description: Maximum timestep, N-body units (raw HDF5 SMAX).
+    public: true
+    nullable: false
+  - name: nnbopt
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Optimal neighbor number (raw HDF5 NNBOPT).
+    public: true
+    nullable: false
+  - name: epoch0_myr
+    dtype: float64
+    unit: Myr
+    ucd: time.epoch
+    description: Initial epoch of the simulation (raw HDF5 EPOCH0).
+    public: true
+    nullable: false
+  - name: n_single
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Number of single stars at this snapshot (raw HDF5 N_SINGLE).
+    public: true
+    nullable: false
+  - name: n_binary
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Number of binaries at this snapshot (raw HDF5 N_BINARY).
+    public: true
+    nullable: false
+  - name: n_merger
+    dtype: int64
+    unit: null
+    ucd: meta.number
+    description: Cumulative number of merger/collision events up to this snapshot (raw HDF5 N_MERGER).
+    public: true
+    nullable: false
+  - name: source_hdf5_path
+    dtype: string
+    unit: null
+    ucd: meta.ref.url
+    description: Absolute path of the source HDF5 file this row was derived from (provenance only).
+    public: false
+    nullable: false

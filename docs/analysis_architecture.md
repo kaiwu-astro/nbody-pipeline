@@ -83,6 +83,16 @@ path.
   Heavy or science-specific derived quantities belong in a dedicated feature
   task instead (see Roadmap #2 for why some existing derived columns need to
   move out of the reader).
+- **`hdf5_reader_kind = "raw"` for tasks needing untouched source values**: a
+  task that must not see `read_file`'s NS/BH display clipping, or must not
+  read/write the L1 feather cache (e.g. because the source/archive directory
+  should never get new files written next to it), sets the class attribute
+  `hdf5_reader_kind = "raw"`. `HDF5ScanRunner` then routes that task's file
+  read through `HDF5FileProcessor.read_raw_tables` ->
+  `raw_dataframes_from_hdf5_file` instead of `read_tables`. All tasks sharing
+  one file read must agree on `hdf5_reader_kind`; the runner raises if they
+  do not. See `nbody_pipeline.analysis.particle_lake` for the reference
+  usage.
 - **`plot_hdf5_file` visualizer freeze**: do not add new visualizers to
   `SimulationPlotter.plot_hdf5_file` until the plot-task registry (Roadmap #3)
   exists.
@@ -131,10 +141,160 @@ ordered plan. Items are loosely ordered by dependency.
    coll.13/coal.24 lineage) and `escaper_events`, using the same
    `ParquetDatasetCacheMixin` shape and a new schema YAML each. These unlock
    an `is_bound`/escape flag for a future `compact_object_history` v2.
-5. **Full particle lake** (explicitly deferred by user decision this round):
-   revisit where Parquet parts get written (writing from worker processes is
-   safe too, since part paths are unique per source file) and whether
-   coordinates/velocities should be downcast to `float32`.
+5. **Full particle lake** -- implemented. Four new schema-registered Parquet
+   tables cover every snapshot (not just compact objects), in
+   `nbody_pipeline/analysis/particle_lake.py`:
+   - `snapshot_singles` / `snapshot_binaries` / `snapshot_mergers`
+     (`object_rows`, `ParquetDatasetCacheMixin`): raw, force-derivative-free
+     column subsets (see the column-drop rationale in each schema YAML's
+     descriptions), coordinates/velocities/physical quantities downcast to
+     `float32` (ids/`ttot`/`time_myr` stay `int64`/`float64`).
+   - `snapshot_scalars` (`snapshot_scalar`, `ParquetTableCacheMixin`): one row
+     per TTOT, every valid slot of the raw HDF5 scalars array.
+
+   All four tasks set `hdf5_reader_kind = "raw"` (see Normative policies
+   below) so they never touch the L1 feather cache and never apply the NS/BH
+   display clipping `read_file` bakes in. The three `object_rows` tasks use
+   the Risks #2 worker-direct-write escape hatch unconditionally (not just
+   under `parallel=True`): `process_file` calls
+   `ParquetDatasetCacheMixin.write_part` itself and returns only
+   `{"part", "row_count", "ttot_min", "ttot_max", "file_meta"}`, never the
+   full DataFrame.
+
+   Storage: an optional second root, `paths.lake_dir` ->
+   `config.lake_dir_of[simu]`, routed via
+   `nbody_pipeline.analysis.cache_paths.LAKE_FEATURES` (falls back to
+   `analysis_cache_dir` when `paths.lake_dir` is unset, so tests/configs that
+   never set it keep working unmodified). Not run by nightly
+   `update_analysis_store`; build explicitly with `python -m nbody_pipeline
+   analyze --features lake`. See `scripts/lake_preflight.py` for the
+   read-only duplicate/overlap check that should run before a
+   full-simulation (unsampled, `sample_every_nb_time: null`) rebuild.
+
+   **Cross-file TTOT dedup**: real archived simulations have restart-boundary
+   snapshot duplication -- two consecutive run directories both write the
+   checkpoint at their shared boundary (`scripts/lake_preflight.py` on
+   madnuc's 0sb/20sb/60sb found ~1-8 duplicated TTOT per overlapping
+   directory pair, never a whole duplicated directory). Renaming an entire
+   run directory `*bad*` for this would discard its other, unique snapshots,
+   so dedup instead happens per TTOT, at write time:
+   `ParticleLakeProcessor.build_scan_jobs()` calls
+   `compute_ttot_dedup_exclusions()`, which reads every selected file's
+   `Step#` `Time` attrs (cheap, no dataset reads) and picks the file with the
+   latest mtime as authoritative for each contested TTOT (mtime, not the
+   run-directory's SLURM job ID, since a resubmitted job can have a *lower*
+   job ID than the run it superseded but still finish later). The resulting
+   `{path: {ttot to drop}}` map is passed into
+   `SnapshotSinglesTask`/`SnapshotBinariesTask`/`SnapshotMergersTask`, which
+   drop the loser rows in `_build_rows` before writing their part -- so the
+   Parquet output never contains a duplicate `(simulation_id, ttot,
+   object_id)`. The map is cached at `<lake_dir>/<simu>/ttot_dedup_map.json`,
+   keyed by a hash of the exact file list, so an unchanged incremental
+   `analyze --features lake` run does not re-read every file's attrs.
+   `snapshot_scalars` needs no such mechanism: its `ParquetTableCacheMixin`
+   merge (`replace_ttot_rows`) already deduplicates by TTOT for free.
+
+   **Real-archive robustness** (found running the full three-simulation build
+   on madnuc's `0sb`/`20sb`/`60sb`): a year-plus archive of restarted jobs
+   contains files a clean synthetic test corpus would not. Two confirmed
+   cases and their fixes:
+   - Some archived files (`old_run_archive/snap.40/*.h5part` on `0sb`, 435
+     files) predate the `"176 Bin Label"`/`"176 Bin cm Name"` dataset
+     entirely -- every other `Bin *` column is present. `bin_label` falls
+     back to the sentinel `-9` ("unknown", documented in
+     `snapshot_binaries.yaml`) instead of `KeyError`-ing the file.
+   - A small number of files are genuinely corrupted at the HDF5 layer (e.g.
+     h5py `RuntimeError("Unable to get group info (wrong B-tree signature)")`
+     on a truncated/interrupted write). `HDF5ScanOptions.skip_unreadable_files`
+     (default `False`, so `compact_object_history`/`snapshot_summary` keep the
+     original fail-fast-and-checkpoint behavior) is set `True` by default only
+     for `ParticleLakeProcessor`: a read failure is logged and treated as an
+     empty file (every task's empty-tables path already produces a valid
+     result) rather than aborting a multi-hour/multi-terabyte scan, and the
+     file is still marked processed so it is not retried every run.
+   - `ParquetDatasetCacheMixin.write_part`'s tmp file is now named with a
+     per-call-unique suffix (`{pid}.{uuid4 hex}.tmp`), not just
+     `{part_name}.tmp`, and the final `os.replace(tmp_path, part_path)` is
+     wrapped in `_replace_with_retry` (a few attempts with exponential
+     backoff) as defense in depth. Neither alone fixed the real
+     `FileNotFoundError` seen under `parallel=True` on the full-archive
+     build -- the actual root cause was a **checkpoint/worker race**:
+     `HDF5ScanRunner._write_task_checkpoints` (used for both the periodic
+     `checkpoint_every_files` flush and the crash-flush in the `except`
+     clause) runs in the main process *while other workers in the pool can
+     still be mid-`write_part`* for different files. `write_cache_and_meta`
+     unconditionally called `_prune_orphan_parts`, which treats any
+     `data_dir` entry not yet in `processed_files` as an orphan and deletes
+     it -- including another worker's brand-new tmp file (or a just-renamed
+     `.parquet` part whose `file_result` the main process hadn't consumed
+     yet). `HDF5ScanTask.write_cache_and_meta` gained a
+     `prune_orphans: bool = True` parameter (`ParquetTableCacheMixin` and the
+     feather-backed mixins accept and ignore it, no orphan-part concept
+     there); the runner passes `prune_orphans=False` for every mid-run
+     checkpoint and only prunes at the one point provably safe by
+     construction -- the final `write_cache_and_meta` call after the main
+     `for file_result in file_results` loop has consumed every item `imap`
+     will ever yield, so no worker can still be writing.
+
+   **Post-mortem validation after the real full three-simulation build**
+   (row-count conservation: `sum(scalars.n_single/n_binary/n_merger)` vs.
+   actual row counts; uniqueness: `(ttot, object_id[, _2])` duplicates).
+   Two more findings, both from the *earlier, now-fixed* checkpoint/worker
+   race, not from the fix itself:
+   - The repeated crash/retry cycle while landing the fixes above left a
+     small number of stale `processed_files` manifest entries on `0sb`
+     (11-11-10 across singles/binaries/mergers): the entry claimed a part
+     was written, but the part file did not exist on disk (deleted by the
+     pre-fix race in an earlier attempt). `HDF5ScanRunner`'s
+     `incremental_from_cache_tail` optimization
+     (`_paths_to_check_for_task`) trusts `processed_files` membership
+     without re-verifying `is_file_fresh` for anything "before the tail",
+     so these files were silently never retried across four subsequent
+     resumed runs -- ~89M missing singles rows for `0sb` alone.
+     **Recovery** (not a code change; a one-off repair on already-written
+     production output): find `processed_files` entries whose `part` is
+     set but `(data_dir / part).exists()` is `False`, delete those entries,
+     rerun `analyze --features lake` *without* `--force` (only the handful
+     of affected files get reprocessed). This class of corruption should
+     not recur now that mid-run pruning no longer deletes in-flight
+     writes, but the recovery recipe is worth keeping in mind for any
+     future run interrupted by something else (OOM-kill, node failure,
+     `Ctrl-C`).
+   - A rarer, still-open edge case: `compute_ttot_dedup_exclusions` picks
+     its per-TTOT winner by mtime *before* anything has tried to actually
+     read the file, so a corrupted file can win a dedup tie-break it will
+     later fail to honor -- its legitimate competitor's rows get excluded,
+     and the winner itself contributes nothing once
+     `skip_unreadable_files` catches it, netting a silent gap for that
+     TTOT (one occurrence found on `0sb`: TTOT `4230.375`, ~991694 rows,
+     manually repaired by removing the wrongly-excluded competitor's
+     dedup-map entry and its manifest entry, then rerunning
+     incrementally). Not fixed at the code level: `compute_ttot_dedup_exclusions`
+     would need read-failure awareness (e.g. accept a set of known-bad
+     paths, or attempt a cheap-but-deeper readability probe) to pick the
+     next-best contributor automatically. Given this requires *both* a
+     corrupted file *and* that file winning a dedup tie-break, it should
+     stay extremely rare in practice.
+   - **Fixed**: `snapshot_scalars` used to dedup by TTOT solely via
+     `replace_ttot_rows`'s "last file processed wins" (file-processing
+     order, i.e. filename-derived time), while `snapshot_singles`/
+     `binaries`/`mergers` dedup via `compute_ttot_dedup_exclusions`'s
+     "latest mtime wins". For a restart-boundary TTOT with
+     near-but-not-exactly-identical contributing files, these two criteria
+     could disagree, so `scalars.n_single` could differ by a handful of
+     particles from the actual `snapshot_singles` row count for that one
+     TTOT. Measured impact before this fix (row-count conservation check,
+     `expected - actual`, out of tens of billions of rows): `0sb` singles
+     -2819/binaries -8/mergers 0; `20sb` singles -89/binaries +3/mergers 0;
+     `60sb` singles +18083/binaries +1684/mergers +2 -- all well under
+     10^-4 % of the total, but real. `SnapshotScalarsTask` now takes the
+     same `excluded_ttot_by_path` the other three tasks use and drops
+     dedup-loser rows before they ever reach `replace_ttot_rows`, so all
+     four tables agree on the same per-TTOT winner regardless of
+     file-processing order. `schema_version` bumped 1 -> 2 so this applies
+     retroactively via a full rebuild of just `snapshot_scalars` (cheap:
+     one row per TTOT, not per object) -- `snapshot_singles`/`binaries`/
+     `mergers` (`schema_version` unchanged) are untouched.
 6. **VO release export**: a `release/` builder that exports `public: true`
    columns (per the schema registry) to VOTable via `astropy`; unit/UCD
    metadata is already in place by this point.
@@ -150,13 +310,17 @@ ordered plan. Items are loosely ordered by dependency.
    hook so a Parquet dataset task can clear stale parts on a forced rebuild.
 2. **Worker to main-process pickle volume**: for late evolutionary stages with
    many white dwarfs, per-file compact-object row counts can reach
-   10^5-10^6. Mitigation order: tight column projection (done from the
-   start), then downcast coordinates/velocities to `float32` if needed (schema
+   10^5-10^6 (and full-snapshot singles/binaries row counts are ~10^6-10^7 per
+   file). Mitigation order: tight column projection (done from the start),
+   then downcast coordinates/velocities to `float32` if needed (schema
    change), then escape hatch of writing the part directly inside
-   `process_file` in the worker and returning only
-   `{"part", "row_count", "file_meta"}` to the main process (part paths are
-   unique per source file, so there is no write collision). This escape
-   hatch is documented here but not implemented this round.
+   `process_file` and returning only `{"part", "row_count", "ttot_min",
+   "ttot_max", "file_meta"}` to the main process (part paths are unique per
+   source file, so there is no write collision). Implemented as
+   `ParquetDatasetCacheMixin.write_part`, used unconditionally (serial or
+   parallel) by the particle-lake `object_rows` tasks (Roadmap #5); the pilot
+   `CompactObjectHistoryTask` still uses the smaller `"rows"` shape since its
+   per-file row counts stay in the 10^2-10^4 range.
 3. **Concurrent scan invocations**: e.g. `analyze` and a nightly plotting run
    touching the same simulation concurrently. This has the same exposure as
    the existing feather cache today (atomic `os.replace` prevents corruption,

@@ -291,7 +291,8 @@ class FakeTask:
     def merge_file_result(self, cache_df, hdf5_path, result):
         return pd.concat([cache_df, result["rows"]], ignore_index=True)
 
-    def write_cache_and_meta(self, cache_df, processed_files, options):
+    def write_cache_and_meta(self, cache_df, processed_files, options, *, prune_orphans=True):
+        del prune_orphans
         self.writes += 1
 
     def finalize_cache(self, cache_df):
@@ -324,7 +325,8 @@ class FileBackedTask(FakeTask):
             "file_meta": {"mtime": 1.0, "ttot": [ttot]},
         }
 
-    def write_cache_and_meta(self, cache_df, processed_files, options):
+    def write_cache_and_meta(self, cache_df, processed_files, options, *, prune_orphans=True):
+        del prune_orphans
         self.writes += 1
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_df.to_feather(self.cache_path)
@@ -391,6 +393,152 @@ def test_persistent_scan_options_ignore_checkpoint_frequency() -> None:
 
     assert first == second
     assert "checkpoint_every_files" not in first
+
+
+def test_persistent_scan_options_ignore_parallel() -> None:
+    """A login-node pilot run (parallel=False) and an sbatch run (parallel=True) for the
+    same simulation/feature must compare equal, or the sbatch run silently deletes the
+    pilot's Parquet dataset via prepare_full_rebuild() on its first 'options changed'."""
+    serial = hdf5_scan.persistent_scan_options(HDF5ScanOptions(parallel=False))
+    parallel = hdf5_scan.persistent_scan_options(HDF5ScanOptions(parallel=True))
+
+    assert serial == parallel
+    assert "parallel" not in serial
+
+
+def test_normalize_persisted_scan_options_strips_legacy_parallel_key() -> None:
+    legacy_meta_options = {
+        "sample_every_nb_time": 1.0,
+        "wait_age_hour": 24,
+        "use_hdf5_cache": True,
+        "parallel": True,
+        "exclude_bad_dirname": True,
+        "incremental_from_cache_tail": True,
+    }
+
+    normalized = hdf5_scan.normalize_persisted_scan_options(legacy_meta_options)
+
+    assert "parallel" not in normalized
+    assert normalized == hdf5_scan.persistent_scan_options(HDF5ScanOptions())
+
+
+def test_normalize_persisted_scan_options_passes_through_non_dict() -> None:
+    assert hdf5_scan.normalize_persisted_scan_options(None) is None
+
+
+def test_legacy_manifest_with_parallel_key_does_not_trigger_full_rebuild(tmp_path: Path) -> None:
+    """Regression test for the exact scenario in docs/analysis_architecture.md Risks:
+    a manifest written before 'parallel' was excluded from persistent_scan_options must
+    not look like an options change (which would delete the whole Parquet dataset)."""
+    config = make_config(tmp_path)
+    hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
+    Path(hdf5_path).write_text("fake")
+    tables = {
+        hdf5_path: {
+            "scalars": pd.DataFrame({"TTOT": [1.0]}),
+            "binaries": pd.DataFrame({"TTOT": [1.0]}),
+        }
+    }
+    processor = FakeProcessor([hdf5_path], tables)
+    legacy_options = {
+        **hdf5_scan.persistent_scan_options(HDF5ScanOptions(wait_age_hour=0)),
+        "parallel": True,  # written by a pre-fix sbatch run
+    }
+    task = MetaTask(
+        "legacy_parallel",
+        {
+            "processed_files": {hdf5_path: {"mtime": Path(hdf5_path).stat().st_mtime}},
+            "scan_options": legacy_options,
+        },
+        pd.DataFrame({"old": [1, 2]}),
+    )
+    task.fresh_paths = {hdf5_path}  # already cached and unchanged -> should stay untouched
+    rebuild_calls = []
+    task.prepare_full_rebuild = lambda: rebuild_calls.append(True)
+    runner = HDF5ScanRunner(config, processor)
+
+    result = runner.run("sim", [task], HDF5ScanOptions(wait_age_hour=0, parallel=False))
+
+    assert rebuild_calls == []
+    assert processor.read_count == 0
+    # If options_changed had incorrectly fired, cache_df would have been reset to empty
+    # before the (skipped, since fresh) file could repopulate it.
+    assert result["legacy_parallel"]["old"].tolist() == [1, 2]
+
+
+def test_hdf5_scan_options_from_config_applies_overrides(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    config.hdf5["file_selection"]["sample_every_nb_time"] = 1.0
+
+    options = hdf5_scan_options_from_config(
+        config, overrides={"sample_every_nb_time": None, "use_hdf5_cache": False}
+    )
+
+    assert options.sample_every_nb_time is None
+    assert options.use_hdf5_cache is False
+    # Non-overridden fields still come from the global hdf5 config section.
+    assert options.wait_age_hour == 0
+
+
+def test_hdf5_scan_options_from_config_overrides_reject_unknown_field(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+
+    with pytest.raises(TypeError):
+        hdf5_scan_options_from_config(config, overrides={"not_a_real_field": True})
+
+
+class RawReaderTask(FakeTask):
+    hdf5_reader_kind = "raw"
+
+
+def test_mixed_hdf5_reader_kind_in_one_file_read_raises(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
+    Path(hdf5_path).write_text("fake")
+    tables = {
+        hdf5_path: {
+            "scalars": pd.DataFrame({"TTOT": [1.0]}),
+            "binaries": pd.DataFrame({"TTOT": [1.0]}),
+        }
+    }
+    processor = FakeProcessor([hdf5_path], tables)
+    runner = HDF5ScanRunner(config, processor)
+
+    with pytest.raises(ValueError, match="hdf5_reader_kind"):
+        runner.run(
+            "sim",
+            [FakeTask("processed"), RawReaderTask("raw")],
+            HDF5ScanOptions(wait_age_hour=0),
+        )
+
+
+def test_raw_hdf5_reader_kind_calls_read_raw_tables(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
+    Path(hdf5_path).write_text("fake")
+
+    class RawCapturingProcessor(FakeProcessor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.raw_calls = []
+
+        def read_raw_tables(self, hdf5_path, tables, columns_by_table=None):
+            self.raw_calls.append(hdf5_path)
+            return {table: self.tables_by_path[hdf5_path][table] for table in tables}
+
+    tables = {
+        hdf5_path: {
+            "scalars": pd.DataFrame({"TTOT": [1.0]}),
+            "binaries": pd.DataFrame({"TTOT": [1.0]}),
+        }
+    }
+    processor = RawCapturingProcessor([hdf5_path], tables)
+    runner = HDF5ScanRunner(config, processor)
+
+    runner.run("sim", [RawReaderTask("raw")], HDF5ScanOptions(wait_age_hour=0))
+
+    assert processor.raw_calls == [hdf5_path]
+    assert processor.read_count == 0
 
 
 def test_ttot_sample_mask_matches_scalar_sample_check() -> None:
@@ -547,6 +695,78 @@ def test_scan_runner_flushes_partial_checkpoint_on_exception(tmp_path: Path) -> 
     meta = json.loads(task.meta_path.read_text())
     assert set(meta["processed_files"]) == {paths[0]}
     assert pd.read_feather(task.cache_path)["path"].tolist() == [paths[0]]
+
+
+class EmptyTolerantFileBackedTask(FileBackedTask):
+    """Models real production tasks (e.g. particle_lake's): missing/empty tables
+    in df_dict produce a valid empty result instead of KeyError-ing, and (like
+    FileBackedTask) persists cache/meta to disk so freshness carries across runs."""
+
+    def process_file(self, hdf5_path, df_dict, meta, cache_df):
+        scalars = df_dict.get("scalars", pd.DataFrame())
+        if scalars.empty:
+            rows = pd.DataFrame({"task": [], "path": []})
+        else:
+            rows = pd.DataFrame({"task": [self.name], "path": [hdf5_path]})
+        return {"rows": rows, "file_meta": hdf5_scan.default_file_meta(hdf5_path, df_dict)}
+
+
+def test_skip_unreadable_files_option_treats_read_failure_as_empty_result(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    paths = [str(tmp_path / f"snap.40_{idx}.h5part") for idx in range(3)]
+    for path in paths:
+        Path(path).write_text("fake")
+    tables = {
+        path: {
+            "scalars": pd.DataFrame({"TTOT": [float(idx)]}),
+            "binaries": pd.DataFrame({"TTOT": [float(idx)]}),
+        }
+        for idx, path in enumerate(paths)
+    }
+    task = EmptyTolerantFileBackedTask("lake_like", tmp_path / "task_cache")
+    processor = FailingProcessor(paths, tables, {paths[1]})
+    runner = HDF5ScanRunner(config, processor)
+
+    result = runner.run(
+        "sim",
+        [task],
+        HDF5ScanOptions(wait_age_hour=0, skip_unreadable_files=True),
+    )
+
+    assert result["lake_like"]["path"].tolist() == [paths[0], paths[2]]
+
+    # The unreadable file is still marked processed (empty ttot list) so a
+    # later run with a still-failing processor does not retry it.
+    resumed_task = EmptyTolerantFileBackedTask("lake_like", tmp_path / "task_cache")
+    resumed_processor = FailingProcessor(paths, tables, {paths[1]})
+    resumed_result = HDF5ScanRunner(config, resumed_processor).run(
+        "sim",
+        [resumed_task],
+        HDF5ScanOptions(wait_age_hour=0, skip_unreadable_files=True),
+    )
+    assert resumed_processor.read_paths == []  # nothing re-read: all 3 already "processed"
+    assert resumed_result["lake_like"]["path"].tolist() == [paths[0], paths[2]]
+
+
+def test_skip_unreadable_files_defaults_to_false_and_still_raises(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    paths = [str(tmp_path / f"snap.40_{idx}.h5part") for idx in range(2)]
+    for path in paths:
+        Path(path).write_text("fake")
+    tables = {
+        path: {
+            "scalars": pd.DataFrame({"TTOT": [float(idx)]}),
+            "binaries": pd.DataFrame({"TTOT": [float(idx)]}),
+        }
+        for idx, path in enumerate(paths)
+    }
+    task = EmptyTolerantFileBackedTask("strict", tmp_path / "task_cache2")
+    runner = HDF5ScanRunner(config, FailingProcessor(paths, tables, {paths[1]}))
+
+    with pytest.raises(RuntimeError, match="failed to read"):
+        runner.run("sim", [task], HDF5ScanOptions(wait_age_hour=0))
 
 
 def test_scan_runner_process_file_uses_initial_cache_view(tmp_path: Path) -> None:

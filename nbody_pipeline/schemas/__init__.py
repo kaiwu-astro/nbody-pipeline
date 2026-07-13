@@ -32,6 +32,7 @@ _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # Allowed YAML dtype tokens -> pandas dtype string used to build empty frames.
 _PANDAS_DTYPE = {
     "int64": "int64",
+    "int32": "int32",
     "float64": "float64",
     "float32": "float32",
     "bool": "bool",

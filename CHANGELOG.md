@@ -16,6 +16,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.cache/nbody_pipeline/` (was `~/.cache/dragon3_pipelines/`).
 
 ### Added
+- Full snapshot particle lake (`nbody_pipeline.analysis.particle_lake`): four new
+  VO-safe Parquet feature tables -- `snapshot_singles`, `snapshot_binaries`,
+  `snapshot_mergers`, `snapshot_scalars` -- covering every snapshot (not just compact
+  objects) with raw, unclipped source values (no NS/BH display clipping, no
+  force/force-derivative integrator columns). Built via `python -m nbody_pipeline
+  analyze --features lake`; not run by the nightly `update_analysis_store` due to its
+  size. Requires an optional second storage root, `paths.lake_dir` (see
+  `config.example.yaml`); falls back to `analysis_cache_dir` when unset. New
+  `scripts/lake_preflight.py` read-only pre-flight check for duplicate/overlapping HDF5
+  files before a full-simulation rebuild. Cross-file TTOT duplicates (restart-boundary
+  checkpoints written by two consecutive run directories) are resolved at write time,
+  per-TTOT (`ParticleLakeProcessor`/`compute_ttot_dedup_exclusions`, cached at
+  `<lake_dir>/<simu>/ttot_dedup_map.json`) rather than by excluding whole run
+  directories, so no legitimate snapshot data is discarded. `snapshot_binaries.cm_id`
+  and `snapshot_mergers.cm_id` are documented as NOT reliably unique within one
+  snapshot -- confirmed against real pilot data and NBODY6++GPU source
+  (`custom_output.F`) that KS-pair and wide-binary center-of-mass names use
+  independent, numerically colliding schemes; use (`object_id_1`, `object_id_2`[,
+  `object_id_3`]) as the per-snapshot unique key instead (also now the part-internal
+  sort key). Running the full three-simulation build surfaced two more real-archive
+  edge cases, both fixed: `snapshot_binaries.bin_label` now falls back to sentinel
+  `-9` ("unknown") for files that predate the `Bin Label`/`Bin cm Name` dataset
+  entirely (confirmed on `0sb`'s `old_run_archive/snap.40/`, 435 files, every other
+  `Bin *` column present), and a new `HDF5ScanOptions.skip_unreadable_files` option
+  (default off; on by default only for `ParticleLakeProcessor`) logs and skips
+  genuinely corrupted HDF5 files (h5py `RuntimeError`/`OSError`, e.g. "wrong B-tree
+  signature") instead of aborting the whole scan; `compact_object_history`/
+  `snapshot_summary` keep the original fail-fast-and-checkpoint behavior.
+  `ParquetDatasetCacheMixin.write_part` now writes to a per-call-unique tmp
+  filename (pid + random suffix) and retries `os.replace()` with backoff on
+  `FileNotFoundError` (defense in depth). The actual root cause of the real
+  full-archive build's `FileNotFoundError` under `parallel=True`: mid-run
+  checkpoints (periodic or crash-flush) ran `write_cache_and_meta` ->
+  `_prune_orphan_parts` in the main process while *other* workers could still
+  be mid-`write_part`, so a checkpoint's unconditional "not yet in
+  `processed_files` == orphan" prune could delete another worker's brand-new
+  tmp/part file out from under it. `HDF5ScanTask.write_cache_and_meta` gained
+  a `prune_orphans: bool = True` parameter; the runner now passes `False` for
+  every mid-run checkpoint and only prunes at the one provably-safe point
+  (after every worker's result has been consumed, at the very end of a scan).
+  `compact_object_history`/`snapshot_summary`'s feather-backed cache mixins
+  accept and ignore the new parameter (no orphan-part concept there). Full
+  build completed for `0sb`/`20sb`/`60sb` (12689 source files, ~4.6 TiB
+  Parquet output) with post-mortem validation (row-count conservation against
+  `snapshot_scalars.n_single/n_binary/n_merger`, uniqueness of `(ttot,
+  object_id[, _2])`). Two residual, real-archive findings from the repeated
+  crash/retry cycle while landing the fixes above (not from the fixes
+  themselves), both documented in detail in
+  `docs/analysis_architecture.md` Roadmap #5: a small number of stale
+  `processed_files` manifest entries left by the *pre-fix* checkpoint race
+  (repaired by removing entries whose declared part is missing on disk and
+  rerunning incrementally), and one occurrence of a corrupted file winning a
+  cross-file TTOT dedup tie-break it could not honor, silently excluding its
+  valid competitor (repaired by hand for the one affected TTOT; the general
+  case -- `compute_ttot_dedup_exclusions` picking a winner before anything
+  has tried to read it -- remains an open, documented, extremely-rare edge
+  case). A separate small inconsistency is now fixed: `snapshot_scalars`'s
+  TTOT dedup (`replace_ttot_rows`, "last file processed wins") could
+  disagree with the other three tables' (`compute_ttot_dedup_exclusions`,
+  "latest mtime wins") for restart-boundary TTOTs with near-but-not-identical
+  contributing files (measured impact before the fix was under 10^-4 % of
+  total rows in all three simulations, but real). `SnapshotScalarsTask` now
+  takes and applies the same `excluded_ttot_by_path` as the other three
+  tasks; `schema_version` bumped 1 -> 2 to force a retroactive full rebuild
+  of just `snapshot_scalars` (the other three tables are untouched).
+- `HDF5FileProcessor.read_raw_tables` / `nbody_pipeline.io.text_parsers.raw_dataframes_from_hdf5_file`:
+  an h5py-level raw HDF5 reader (column-projected, source dtypes preserved, no L1
+  feather cache writes) for `HDF5ScanTask`s that declare `hdf5_reader_kind = "raw"`.
 - `CHANGELOG.md`, `CITATION.cff`, `config.example.yaml`, and a tracked JUWELS/madnuc
   site config (`configs/juwels_madnuc.yaml`).
 - `scripts/release.sh` release helper and a versioning/changelog workflow section in
@@ -38,6 +106,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `README.md` permissions (was `600`, unreadable by other group members on the
   shared filesystem).
+- `HDF5ScanTask` Parquet/feather manifests no longer treat a `scan.parallel` mismatch
+  (e.g. a login-node pilot run followed by an sbatch run for the same
+  simulation/feature) as an "options changed" full rebuild -- previously this could
+  silently delete and reprocess an entire multi-terabyte Parquet dataset.
 
 ## [1.0.0] - 2026-07-10
 

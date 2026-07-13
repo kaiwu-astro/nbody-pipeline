@@ -161,6 +161,62 @@ class TestConfigManager:
         assert config.analysis_cache_dir_of["0sb"] == f"{root}/0sb"
         assert config.particle_df_cache_dir_of["0sb"] == f"{root}/0sb/particle_df"
 
+    def test_lake_dir_unset_by_default(self, base_paths_config):
+        """paths.lake_dir is optional; config.lake_dir_of must be an empty dict when unset."""
+        config = ConfigManager(config_path=str(base_paths_config))
+
+        assert config.lake_dir is None
+        assert config.lake_dir_of == {}
+
+    def test_user_config_sets_lake_dir_and_derives_lake_dir_of(self, temp_dir):
+        """paths.lake_dir derives lake_dir_of[simu] == <lake_dir>/<simu>, per simulation."""
+        lake_root = str(temp_dir / "particle_lake")
+        user_config = {
+            "paths": {
+                "simulations": {"0sb": str(temp_dir / "0sb"), "20sb": str(temp_dir / "20sb")},
+                "plot_dir": str(temp_dir / "plots"),
+                "analysis_cache_dir": str(temp_dir / "analysis_cache"),
+                "lake_dir": lake_root,
+            },
+        }
+        user_config_path = temp_dir / "lake_config.yaml"
+        with open(user_config_path, "w") as f:
+            yaml.dump(user_config, f)
+
+        config = ConfigManager(config_path=str(user_config_path))
+
+        assert config.lake_dir == lake_root
+        assert config.lake_dir_of["0sb"] == f"{lake_root}/0sb"
+        assert config.lake_dir_of["20sb"] == f"{lake_root}/20sb"
+
+    def test_default_particle_lake_config_section(self, base_paths_config):
+        """particle_lake defaults to disabled with sample_every_nb_time: null (full lake)."""
+        config = ConfigManager(config_path=str(base_paths_config))
+
+        assert config.particle_lake["enabled"] is False
+        assert config.particle_lake["scan"]["sample_every_nb_time"] is None
+        assert config.particle_lake["scan"]["use_hdf5_cache"] is False
+
+    def test_user_config_overrides_particle_lake_section(self, temp_dir):
+        user_config = {
+            "paths": {
+                "simulations": {"0sb": str(temp_dir / "0sb")},
+                "plot_dir": str(temp_dir / "plots"),
+                "analysis_cache_dir": str(temp_dir / "analysis_cache"),
+            },
+            "particle_lake": {"enabled": True, "scan": {"checkpoint_every_files": 5}},
+        }
+        user_config_path = temp_dir / "particle_lake_config.yaml"
+        with open(user_config_path, "w") as f:
+            yaml.dump(user_config, f)
+
+        config = ConfigManager(config_path=str(user_config_path))
+
+        assert config.particle_lake["enabled"] is True
+        assert config.particle_lake["scan"]["checkpoint_every_files"] == 5
+        # Deep-merged, not replaced: unrelated defaults survive the partial override.
+        assert config.particle_lake["scan"]["sample_every_nb_time"] is None
+
     def test_user_config_overrides_galactic_orbit_and_hdf5(self, temp_dir):
         """Test user config can override feature and global HDF5 settings."""
         user_config = {

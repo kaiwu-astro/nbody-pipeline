@@ -1,0 +1,358 @@
+table: snapshot_binaries
+version: 1
+description: >
+  Per-snapshot rows for every binary, raw-value columns only (no NS/BH display clipping,
+  no force/force-derivative integrator state). The unordered pair (object_id_1,
+  object_id_2) is the reliable per-snapshot unique key -- NOT cm_id, see its column
+  description. See docs/analysis_architecture.md Roadmap #5.
+columns:
+  - name: simulation_id
+    dtype: string
+    unit: null
+    ucd: meta.id
+    description: Simulation config key this row belongs to (e.g. "20sb").
+    public: true
+    nullable: false
+  - name: ttot
+    dtype: float64
+    unit: null
+    ucd: time.epoch
+    description: Simulation time in N-body units.
+    public: true
+    nullable: false
+  - name: time_myr
+    dtype: float64
+    unit: Myr
+    ucd: time.epoch
+    description: Simulation time in megayears.
+    public: true
+    nullable: false
+  - name: object_id_1
+    dtype: int64
+    unit: null
+    ucd: meta.id
+    description: Primary member identifier (raw HDF5 Bin Name1).
+    public: true
+    nullable: false
+  - name: object_id_2
+    dtype: int64
+    unit: null
+    ucd: meta.id
+    description: Secondary member identifier (raw HDF5 Bin Name2).
+    public: true
+    nullable: false
+  - name: cm_id
+    dtype: int64
+    unit: null
+    ucd: meta.id
+    description: >
+      Binary center-of-mass identifier (raw HDF5 Bin cm Name). NOT reliably unique
+      within one snapshot: NBODY6++GPU computes it two different ways depending on
+      bin_label (KS pairs: NZERO + first-member NAME at pairing time, in
+      custom_output.F; wide binaries: NTOT + a per-snapshot sequential counter,
+      unrelated to any particle NAME) and these two ranges can numerically collide
+      since NZERO and NTOT are typically close in value -- confirmed against real
+      simulation data and NBODY6++GPU source (custom_output.F). Use the unordered
+      pair (object_id_1, object_id_2) as the per-snapshot unique key instead.
+    public: true
+    nullable: false
+  - name: kw_1
+    dtype: int32
+    unit: null
+    ucd: src.class
+    description: Primary member stellar type (raw HDF5 Bin KW1).
+    public: true
+    nullable: false
+  - name: kw_2
+    dtype: int32
+    unit: null
+    ucd: src.class
+    description: Secondary member stellar type (raw HDF5 Bin KW2).
+    public: true
+    nullable: false
+  - name: cm_kw
+    dtype: int32
+    unit: null
+    ucd: src.class
+    description: >
+      Binary center-of-mass type code (raw HDF5 Bin cm KW). Odd values >10 flag an ongoing
+      mass-transfer phase; even values >=10 flag a circularized binary (see
+      nbody_pipeline.io.hdf5_reader.HDF5FileProcessor.mark_funny_star_binary).
+    public: true
+    nullable: false
+  - name: bin_label
+    dtype: int32
+    unit: null
+    ucd: meta.code.class
+    description: >
+      Binary classification (raw HDF5 Bin Label): 1 = regular KS-regularized binary, 0 =
+      wide/unperturbed binary, -1 = internal binary of a merger product, -9 = unknown
+      (source HDF5 file predates the "176 Bin Label"/"176 Bin cm Name" dataset -- all
+      other columns are unaffected, confirmed against real archived data).
+    public: true
+    nullable: false
+  - name: mass_1_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: Primary member mass (raw HDF5 Bin M1*).
+    public: true
+    nullable: false
+  - name: mass_2_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: Secondary member mass (raw HDF5 Bin M2*).
+    public: true
+    nullable: false
+  - name: cm_x_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.x
+    description: >
+      Center-of-mass X position. Density-center-corrected position in parsecs: raw HDF5
+      value minus (RDENS x RBAR) from the same snapshot's scalars row (see
+      snapshot_scalars.rdens_*_nb and rbar_pc). Matches the sign/convention of the
+      existing X [pc]/Bin cm X [pc] derived columns in nbody_pipeline.io.hdf5_reader.
+    public: true
+    nullable: false
+  - name: cm_y_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.y
+    description: >
+      Center-of-mass Y position. Density-center-corrected position in parsecs: raw HDF5
+      value minus (RDENS x RBAR) from the same snapshot's scalars row (see
+      snapshot_scalars.rdens_*_nb and rbar_pc). Matches the sign/convention of the
+      existing X [pc]/Bin cm X [pc] derived columns in nbody_pipeline.io.hdf5_reader.
+    public: true
+    nullable: false
+  - name: cm_z_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.z
+    description: >
+      Center-of-mass Z position. Density-center-corrected position in parsecs: raw HDF5
+      value minus (RDENS x RBAR) from the same snapshot's scalars row (see
+      snapshot_scalars.rdens_*_nb and rbar_pc). Matches the sign/convention of the
+      existing X [pc]/Bin cm X [pc] derived columns in nbody_pipeline.io.hdf5_reader.
+    public: true
+    nullable: false
+  - name: cm_vx_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.x
+    description: Center-of-mass X velocity (raw HDF5 Bin cm V1).
+    public: true
+    nullable: false
+  - name: cm_vy_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.y
+    description: Center-of-mass Y velocity (raw HDF5 Bin cm V2).
+    public: true
+    nullable: false
+  - name: cm_vz_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.z
+    description: Center-of-mass Z velocity (raw HDF5 Bin cm V3).
+    public: true
+    nullable: false
+  - name: r_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.distance
+    description: >
+      Distance of the center of mass from the cluster density center,
+      sqrt(cm_x_pc^2+cm_y_pc^2+cm_z_pc^2).
+    public: true
+    nullable: false
+  - name: rel_x_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.x
+    description: Relative X separation, secondary minus primary (raw HDF5 Bin rel X1, already pc).
+    public: true
+    nullable: false
+  - name: rel_y_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.y
+    description: Relative Y separation, secondary minus primary (raw HDF5 Bin rel X2, already pc).
+    public: true
+    nullable: false
+  - name: rel_z_pc
+    dtype: float32
+    unit: pc
+    ucd: pos.cartesian.z
+    description: Relative Z separation, secondary minus primary (raw HDF5 Bin rel X3, already pc).
+    public: true
+    nullable: false
+  - name: rel_vx_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.x
+    description: Relative X velocity, secondary minus primary (raw HDF5 Bin rel V1, already km/s).
+    public: true
+    nullable: false
+  - name: rel_vy_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.y
+    description: Relative Y velocity, secondary minus primary (raw HDF5 Bin rel V2, already km/s).
+    public: true
+    nullable: false
+  - name: rel_vz_kms
+    dtype: float32
+    unit: km/s
+    ucd: phys.veloc;pos.cartesian.z
+    description: Relative Z velocity, secondary minus primary (raw HDF5 Bin rel V3, already km/s).
+    public: true
+    nullable: false
+  - name: cm_pot_nb
+    dtype: float32
+    unit: null
+    ucd: phys.energy
+    description: >
+      Gravitational potential at the binary center of mass, in N-body units (raw HDF5 Bin
+      POT).
+    public: true
+    nullable: false
+  - name: semi_major_axis_au
+    dtype: float32
+    unit: AU
+    ucd: phys.size.smajAxis
+    description: Binary semi-major axis (raw HDF5 Bin A[au]).
+    public: true
+    nullable: false
+  - name: eccentricity
+    dtype: float32
+    unit: null
+    ucd: src.orbital.eccentricity
+    description: Binary orbital eccentricity (raw HDF5 Bin ECC).
+    public: true
+    nullable: false
+  - name: period_days
+    dtype: float32
+    unit: d
+    ucd: time.period
+    description: Binary orbital period (raw HDF5 Bin P[d]).
+    public: true
+    nullable: false
+  - name: pert_gamma
+    dtype: float32
+    unit: null
+    ucd: meta.code
+    description: KS regularization perturbation strength GAMMA (raw HDF5 Bin G).
+    public: true
+    nullable: false
+  - name: radius_1_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: Primary member stellar radius (raw HDF5 Bin RS1*).
+    public: true
+    nullable: false
+  - name: radius_2_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: Secondary member stellar radius (raw HDF5 Bin RS2*).
+    public: true
+    nullable: false
+  - name: luminosity_1_lsun
+    dtype: float32
+    unit: solLum
+    ucd: phys.luminosity
+    description: Primary member luminosity (raw HDF5 Bin L1*), true source value, no display clipping.
+    public: true
+    nullable: false
+  - name: luminosity_2_lsun
+    dtype: float32
+    unit: solLum
+    ucd: phys.luminosity
+    description: Secondary member luminosity (raw HDF5 Bin L2*), true source value, no display clipping.
+    public: true
+    nullable: false
+  - name: teff_1_k
+    dtype: float32
+    unit: K
+    ucd: phys.temperature.effective
+    description: >
+      Primary member effective temperature (raw HDF5 Bin Teff1*), true source value, no
+      display clipping.
+    public: true
+    nullable: false
+  - name: teff_2_k
+    dtype: float32
+    unit: K
+    ucd: phys.temperature.effective
+    description: >
+      Secondary member effective temperature (raw HDF5 Bin Teff2*), true source value, no
+      display clipping.
+    public: true
+    nullable: false
+  - name: core_radius_1_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: Primary member stellar core radius (raw HDF5 Bin RC1*).
+    public: true
+    nullable: false
+  - name: core_radius_2_rsun
+    dtype: float32
+    unit: solRad
+    ucd: phys.size.radius
+    description: Secondary member stellar core radius (raw HDF5 Bin RC2*).
+    public: true
+    nullable: false
+  - name: core_mass_1_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: Primary member stellar core mass (raw HDF5 Bin MC1*).
+    public: true
+    nullable: false
+  - name: core_mass_2_msun
+    dtype: float32
+    unit: solMass
+    ucd: phys.mass
+    description: Secondary member stellar core mass (raw HDF5 Bin MC2*).
+    public: true
+    nullable: false
+  - name: spin_aspn_1
+    dtype: float32
+    unit: null
+    ucd: phys.angMomentum
+    description: Primary member spin parameter (raw HDF5 ASPN1).
+    public: true
+    nullable: false
+  - name: spin_aspn_2
+    dtype: float32
+    unit: null
+    ucd: phys.angMomentum
+    description: Secondary member spin parameter (raw HDF5 ASPN2).
+    public: true
+    nullable: false
+  - name: epoch_1_myr
+    dtype: float32
+    unit: Myr
+    ucd: time.epoch
+    description: Primary member stellar evolution epoch (raw HDF5 EPOCH1).
+    public: true
+    nullable: false
+  - name: epoch_2_myr
+    dtype: float32
+    unit: Myr
+    ucd: time.epoch
+    description: Secondary member stellar evolution epoch (raw HDF5 EPOCH2).
+    public: true
+    nullable: false
+  - name: source_hdf5_path
+    dtype: string
+    unit: null
+    ucd: meta.ref.url
+    description: Absolute path of the source HDF5 file this row was derived from (provenance only).
+    public: false
+    nullable: false

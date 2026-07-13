@@ -17,6 +17,11 @@ paths:
   # Full root for analysis-produced intermediate caches
   analysis_cache_dir: null
 
+  # Optional: second storage root for the full particle-lake feature store
+  # (docs/analysis_architecture.md Roadmap #5). Unset by default; lake
+  # features then fall back to analysis_cache_dir.
+  lake_dir: null
+
 # Figure name prefixes
 figure_prefixes: {}
 
@@ -80,6 +85,17 @@ compact_object_history:
 # One-row-per-snapshot cluster summary, VO-safe schema, Parquet-backed
 snapshot_summary:
   enabled: true
+
+# Full snapshot particle lake (singles/binaries/mergers/scalars), VO-safe
+# schema, Parquet-backed. Not run by nightly update_analysis_store; only via
+# explicit `analyze --features lake`. See docs/analysis_architecture.md
+# Roadmap #5.
+particle_lake:
+  enabled: false
+  scan:
+    sample_every_nb_time: null
+    use_hdf5_cache: false
+    checkpoint_every_files: 25
 
 # Physical constants and thresholds
 physics:
