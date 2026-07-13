@@ -421,6 +421,53 @@ def test_dedup_drops_loser_files_duplicate_ttot_rows(tmp_path: Path) -> None:
     assert not rows.duplicated(subset=["ttot", "object_id"]).any()
 
 
+def test_scalars_task_uses_same_dedup_winner_as_object_tables(tmp_path: Path) -> None:
+    """snapshot_scalars must keep the same mtime-based dedup winner as
+    singles/binaries/mergers for a contested ttot, not whichever file happens to be
+    processed last (ParquetTableCacheMixin's replace_ttot_rows "last one wins" on its
+    own would pick file-processing order, which this fixture deliberately puts in
+    conflict with mtime order: the earlier-mtime loser is processed LAST)."""
+    config = make_config(tmp_path)
+    config.lake_dir_of = {"sim": str(tmp_path / "lake" / "sim")}
+    config.particle_lake = {"enabled": True, "scan": {"sample_every_nb_time": None}}
+
+    path_winner = str(tmp_path / "snap.40_a.h5part")  # later mtime -> dedup winner
+    path_loser = str(tmp_path / "snap.40_b.h5part")  # earlier mtime -> dedup loser
+    Path(path_winner).write_text("winner")
+    Path(path_loser).write_text("loser")
+    os.utime(path_winner, (2000, 2000))
+    os.utime(path_loser, (1000, 1000))
+
+    winner_scalars = _scalars_df(5.5, N=111.0)
+    loser_scalars = _scalars_df(5.5, N=222.0)
+    empty = pd.DataFrame()
+    tables = {
+        path_winner: {
+            "scalars": winner_scalars,
+            "singles": _singles_df(5.5),
+            "binaries": empty,
+            "mergers": empty,
+        },
+        path_loser: {
+            "scalars": loser_scalars,
+            "singles": _singles_df(5.5),
+            "binaries": empty,
+            "mergers": empty,
+        },
+    }
+    # Processing order puts the mtime-loser LAST, so a naive "last file processed
+    # wins" merge (pre-fix) would keep the loser's scalars row instead.
+    processor = FakeRawProcessor([path_winner, path_loser], tables)
+    lake = ParticleLakeProcessor(config, processor)
+    jobs = lake.build_scan_jobs("sim")
+    runner = HDF5ScanRunner(config, processor)
+    outputs = runner.run("sim", [job.task for job in jobs], jobs[0].options)
+
+    scalars = outputs["snapshot_scalars"]
+    assert len(scalars) == 1
+    assert scalars.iloc[0]["n"] == pytest.approx(111.0)
+
+
 def test_ttot_dedup_map_is_cached_and_reused_when_file_list_unchanged(tmp_path: Path) -> None:
     config, processor, _outputs, _hdf5_path = _run_lake_tasks(tmp_path)
     lake = ParticleLakeProcessor(config, processor)

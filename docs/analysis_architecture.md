@@ -275,22 +275,26 @@ ordered plan. Items are loosely ordered by dependency.
      next-best contributor automatically. Given this requires *both* a
      corrupted file *and* that file winning a dedup tie-break, it should
      stay extremely rare in practice.
-   - A small, still-open, low-impact inconsistency: `snapshot_scalars`
-     dedups by TTOT via `replace_ttot_rows`'s "last file processed wins"
-     (file-processing order, i.e. filename-derived time), while
-     `snapshot_singles`/`binaries`/`mergers` dedup via
-     `compute_ttot_dedup_exclusions`'s "latest mtime wins". For a
-     restart-boundary TTOT with near-but-not-exactly-identical contributing
-     files, these two criteria can disagree, so `scalars.n_single` can
-     differ by a handful of particles from the actual `snapshot_singles`
-     row count for that one TTOT. Measured post-repair residuals (row-count
-     conservation check, `expected - actual`, out of tens of billions of
-     rows): `0sb` singles -2819/binaries -8/mergers 0; `20sb` singles
-     -89/binaries +3/mergers 0; `60sb` singles +18083/binaries +1684/mergers
-     +2 -- all well under 10^-4 % of the total. Fix would be giving
-     `SnapshotScalarsTask` the same `excluded_ttot_by_path` the other three
-     tasks already use, plus a full rebuild of `snapshot_scalars` (cheap:
-     one row per TTOT, not per object) to apply it retroactively.
+   - **Fixed**: `snapshot_scalars` used to dedup by TTOT solely via
+     `replace_ttot_rows`'s "last file processed wins" (file-processing
+     order, i.e. filename-derived time), while `snapshot_singles`/
+     `binaries`/`mergers` dedup via `compute_ttot_dedup_exclusions`'s
+     "latest mtime wins". For a restart-boundary TTOT with
+     near-but-not-exactly-identical contributing files, these two criteria
+     could disagree, so `scalars.n_single` could differ by a handful of
+     particles from the actual `snapshot_singles` row count for that one
+     TTOT. Measured impact before this fix (row-count conservation check,
+     `expected - actual`, out of tens of billions of rows): `0sb` singles
+     -2819/binaries -8/mergers 0; `20sb` singles -89/binaries +3/mergers 0;
+     `60sb` singles +18083/binaries +1684/mergers +2 -- all well under
+     10^-4 % of the total, but real. `SnapshotScalarsTask` now takes the
+     same `excluded_ttot_by_path` the other three tasks use and drops
+     dedup-loser rows before they ever reach `replace_ttot_rows`, so all
+     four tables agree on the same per-TTOT winner regardless of
+     file-processing order. `schema_version` bumped 1 -> 2 so this applies
+     retroactively via a full rebuild of just `snapshot_scalars` (cheap:
+     one row per TTOT, not per object) -- `snapshot_singles`/`binaries`/
+     `mergers` (`schema_version` unchanged) are untouched.
 6. **VO release export**: a `release/` builder that exports `public: true`
    columns (per the schema registry) to VOTable via `astropy`; unit/UCD
    metadata is already in place by this point.

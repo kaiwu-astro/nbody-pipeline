@@ -188,7 +188,7 @@ class ParticleLakeProcessor(ScanBackedAnalysisBase):
             SnapshotSinglesTask(self.config, simu_name, excluded_ttot_by_path),
             SnapshotBinariesTask(self.config, simu_name, excluded_ttot_by_path),
             SnapshotMergersTask(self.config, simu_name, excluded_ttot_by_path),
-            SnapshotScalarsTask(self.config, simu_name),
+            SnapshotScalarsTask(self.config, simu_name, excluded_ttot_by_path),
         ]
         return [HDF5ScanJob(simu_name, task, options) for task in tasks]
 
@@ -710,15 +710,30 @@ class SnapshotMergersTask(ParquetDatasetCacheMixin):
 class SnapshotScalarsTask(ParquetTableCacheMixin):
     """One row per snapshot (TTOT) covering every valid slot of the raw scalars array."""
 
-    schema_version = 1
+    # v2: apply the same cross-file TTOT dedup winner (excluded_ttot_by_path, latest
+    # mtime) as snapshot_singles/binaries/mergers. v1 relied solely on
+    # replace_ttot_rows's "last file processed wins" (file-processing order, i.e.
+    # filename-derived time) for its own dedup, which can disagree with the other
+    # three tables' winner for a restart-boundary TTOT with near-but-not-identical
+    # contributing files -- confirmed on real data (0sb/20sb/60sb) as a small
+    # (<1e-4%) row-count mismatch between scalars.n_single/n_binary/n_merger and the
+    # actual per-object row counts. Bumping schema_version forces a full rebuild of
+    # just this table (cheap: one row per TTOT) to apply the fix retroactively.
+    schema_version = 2
     name = "snapshot_scalars"
     hdf5_reader_kind = "raw"
     required_tables: Sequence[str] = ("scalars",)
     columns_by_table: Mapping[str, Sequence[str] | None] = {"scalars": None}
 
-    def __init__(self, config_manager: Any, simu_name: str) -> None:
+    def __init__(
+        self,
+        config_manager: Any,
+        simu_name: str,
+        excluded_ttot_by_path: Mapping[str, set[float]] | None = None,
+    ) -> None:
         self.config = config_manager
         self.simu_name = simu_name
+        self.excluded_ttot_by_path = excluded_ttot_by_path or {}
 
     @property
     def table_schema(self) -> TableSchema:
@@ -744,7 +759,9 @@ class SnapshotScalarsTask(ParquetTableCacheMixin):
         meta: Dict[str, Any],
         cache_df: pd.DataFrame,
     ) -> Dict[str, Any]:
-        rows = self._build_rows(hdf5_path, df_dict.get("scalars", pd.DataFrame()))
+        scalars = df_dict.get("scalars", pd.DataFrame())
+        scalars = _drop_excluded_ttot(scalars, hdf5_path, self.excluded_ttot_by_path)
+        rows = self._build_rows(hdf5_path, scalars)
         return {"rows": rows, "file_meta": default_file_meta(hdf5_path, df_dict)}
 
     def merge_file_result(

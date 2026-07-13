@@ -72,12 +72,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   valid competitor (repaired by hand for the one affected TTOT; the general
   case -- `compute_ttot_dedup_exclusions` picking a winner before anything
   has tried to read it -- remains an open, documented, extremely-rare edge
-  case). A separate, small, still-open inconsistency: `snapshot_scalars`'s
-  TTOT dedup (`replace_ttot_rows`, "last file processed wins") can disagree
-  with the other three tables' (`compute_ttot_dedup_exclusions`, "latest
-  mtime wins") for restart-boundary TTOTs with near-but-not-identical
-  contributing files; measured impact after the repairs above is under
-  10^-4 % of total rows in all three simulations.
+  case). A separate small inconsistency is now fixed: `snapshot_scalars`'s
+  TTOT dedup (`replace_ttot_rows`, "last file processed wins") could
+  disagree with the other three tables' (`compute_ttot_dedup_exclusions`,
+  "latest mtime wins") for restart-boundary TTOTs with near-but-not-identical
+  contributing files (measured impact before the fix was under 10^-4 % of
+  total rows in all three simulations, but real). `SnapshotScalarsTask` now
+  takes and applies the same `excluded_ttot_by_path` as the other three
+  tasks; `schema_version` bumped 1 -> 2 to force a retroactive full rebuild
+  of just `snapshot_scalars` (the other three tables are untouched).
 - `HDF5FileProcessor.read_raw_tables` / `nbody_pipeline.io.text_parsers.raw_dataframes_from_hdf5_file`:
   an h5py-level raw HDF5 reader (column-projected, source dtypes preserved, no L1
   feather cache writes) for `HDF5ScanTask`s that declare `hdf5_reader_kind = "raw"`.
