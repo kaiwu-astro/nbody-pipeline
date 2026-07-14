@@ -1,7 +1,9 @@
 """Physics calculations and formulae for astrophysical simulations"""
 
-from typing import Tuple
+from typing import Tuple, Union
 import numpy as np
+import astropy.constants as constants
+import astropy.units as u
 
 # Re-export tau_gw from io module where it was already migrated
 from nbody_pipeline.io.text_parsers import tau_gw
@@ -10,7 +12,60 @@ __all__ = [
     "tau_gw",
     "compute_binary_orbit_relative_positions",
     "compute_individual_orbit_params",
+    "binding_energy_nb",
+    "ebind_over_kt",
 ]
+
+ArrayLike = Union[float, np.ndarray]
+
+_PC_TO_AU = constants.pc.to(u.AU).value
+
+
+def binding_energy_nb(
+    m1_msun: ArrayLike,
+    m2_msun: ArrayLike,
+    a_au: ArrayLike,
+    *,
+    zmbar_msun: ArrayLike,
+    rbar_pc: ArrayLike,
+) -> ArrayLike:
+    """Binary binding-energy magnitude in N-body units.
+
+    Reproduces ``nbody_pipeline.io.hdf5_reader.HDF5FileProcessor``'s
+    ``Ebind_abs_NBODY`` column (``hdf5_reader.py`` ~L352-362) exactly, so
+    step2 results stay numerically comparable to the existing step1 CSVs:
+    ``m1_nb * m2_nb / (2 * a_nb) / (m1_nb + m2_nb)``, i.e. reduced mass over
+    twice the semi-major axis (all in N-body units). Note this divides by
+    the *binary's own* total mass, not the cluster's -- that is what
+    ``hdf5_reader.py`` does, kept as-is here for consistency rather than
+    "corrected" against the textbook ``-G*m1*m2/(2a)`` form.
+    """
+    m1_nb = np.asarray(m1_msun, dtype=float) / zmbar_msun
+    m2_nb = np.asarray(m2_msun, dtype=float) / zmbar_msun
+    a_nb = np.asarray(a_au, dtype=float) / _PC_TO_AU / rbar_pc
+    return m1_nb * m2_nb / (2.0 * a_nb) / (m1_nb + m2_nb)
+
+
+def ebind_over_kt(ebind_nb: ArrayLike, eclose_nb: ArrayLike) -> ArrayLike:
+    """Binding energy in units of the hard/soft threshold ``eclose_nb``.
+
+    Plain division -- reusable for either the true per-snapshot ``ECLOSE``
+    (``snapshot_scalars.eclose_nb`` in the particle lake, which varies over
+    the run because ``adjust.F`` can re-tune it) or a fixed constant.
+
+    step1 (``hdf5_reader.py:363``) always divides by the fixed config
+    constant ``config.ECLOSE_INPUT`` (default 1.0), *not* the real
+    per-snapshot ``eclose_nb`` -- even though ``eclose_nb`` varies
+    substantially within a single simulation (e.g. 0.003-1.0 in 20sb). This
+    is a known normalization issue in step1, out of scope to fix here; for
+    numerical continuity with step1's ``Ebind/kT``/``is_hard_binary``
+    columns, step2 callers should pass ``config.ECLOSE_INPUT`` (i.e. 1.0),
+    not the true ``eclose_nb``, and label results accordingly (see
+    ``examples/gaia_bh_formation/step2/findings.md``). A proper fix (using
+    the real time-varying threshold) is tracked as a separate future
+    project.
+    """
+    return np.asarray(ebind_nb, dtype=float) / eclose_nb
 
 
 def compute_binary_orbit_relative_positions(

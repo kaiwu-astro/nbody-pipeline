@@ -111,6 +111,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   simulation/feature) as an "options changed" full rebuild -- previously this could
   silently delete and reprocess an entire multi-terabyte Parquet dataset.
 
+### Added
+- `nbody_pipeline.analysis.kstar_semantics`: `decode_cm_kstar`, `decode_member_kw`,
+  `annotate_binary_states` -- pure/vectorized decoders for the raw binary
+  centre-of-mass `cm_kw` (HDF5 Item 160) and member `kw_1`/`kw_2` (Item 158/159)
+  codes, for the Gaia-BH-analog step2 evolution-path study
+  (`examples/gaia_bh_formation/step2/`).
+- `nbody_pipeline.analysis.physics.binding_energy_nb`/`ebind_over_kt`: binding-energy
+  helpers reproducing `hdf5_reader.py`'s existing `Ebind_abs_NBODY`/`Ebind/kT` formulas
+  exactly, so step2 binding-energy continuity checks stay numerically comparable to
+  the existing step1 CSVs.
+- `nbody_pipeline.visualization.evolution_path.EvolutionPathVisualizer` (plus the
+  `PathMember`/`PathBinary`/`PathEpoch`/`EvolutionPath` data model and the pure
+  `mass_to_display_radius`/`assign_member_columns` helpers): a reusable Dragon-2-style
+  ("Formation of an IMBH..." cartoon, Rizzuto et al. 2023) evolution-path diagram
+  renderer, decoupled from any specific study.
+
+### Changed
+- Clarified, no code change needed: source review of `roche.f`/`expel.f`
+  (Nbody6PPGPU-beijing) confirms the existing `cm_kw` odd/even convention already
+  used by `hdf5_reader.py`'s `mark_funny_star_binary` and documented in
+  `schemas/snapshot_binaries.yaml` (odd >=11 = mass transfer ongoing, even >=10 =
+  between episodes) matches the actual runtime behaviour. The NBODY6++GPU manual's
+  prose (`Nb6manual.md` line 1431) states this backwards; see the
+  `nbody_pipeline.analysis.kstar_semantics` module docstring for the full derivation.
+- Documented a known, pre-existing normalization limitation (not fixed here):
+  `hdf5_reader.py`'s `Ebind/kT`/`is_hard_binary` columns divide by the fixed config
+  constant `config.ECLOSE_INPUT` (default 1.0) rather than the real per-snapshot
+  `ECLOSE` value, which genuinely varies over a run (e.g. 0.003-1.0 within 20sb)
+  because `adjust.F` re-tunes it. `physics.ebind_over_kt` reproduces the existing
+  (constant-based) behaviour for continuity with step1; a proper fix using the real
+  time-varying threshold is tracked as a separate future project.
+
 ## [1.0.0] - 2026-07-10
 
 Initial tagged release, consolidating roughly a year of iterative development into a

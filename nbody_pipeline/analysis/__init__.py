@@ -33,6 +33,14 @@ from nbody_pipeline.analysis.physics import (
     tau_gw,
     compute_binary_orbit_relative_positions,
     compute_individual_orbit_params,
+    binding_energy_nb,
+    ebind_over_kt,
+)
+from nbody_pipeline.analysis.kstar_semantics import (
+    CmKstarState,
+    decode_cm_kstar,
+    decode_member_kw,
+    annotate_binary_states,
 )
 
 __all__ = [
@@ -58,4 +66,10 @@ __all__ = [
     "tau_gw",
     "compute_binary_orbit_relative_positions",
     "compute_individual_orbit_params",
+    "binding_energy_nb",
+    "ebind_over_kt",
+    "CmKstarState",
+    "decode_cm_kstar",
+    "decode_member_kw",
+    "annotate_binary_states",
 ]

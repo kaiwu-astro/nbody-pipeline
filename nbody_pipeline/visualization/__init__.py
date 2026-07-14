@@ -15,6 +15,13 @@ from nbody_pipeline.visualization.galactic_orbit import GalacticOrbitVisualizer
 from nbody_pipeline.visualization.collision import CollCoalVisualizer
 from nbody_pipeline.visualization.particle_history import ParticleHistoryVisualizer
 from nbody_pipeline.visualization.purge import PlotPurger, PurgeResult
+from nbody_pipeline.visualization.evolution_path import (
+    PathMember,
+    PathBinary,
+    PathEpoch,
+    EvolutionPath,
+    EvolutionPathVisualizer,
+)
 
 __all__ = [
     "BaseVisualizer",
@@ -29,6 +36,11 @@ __all__ = [
     "ParticleHistoryVisualizer",
     "PlotPurger",
     "PurgeResult",
+    "PathMember",
+    "PathBinary",
+    "PathEpoch",
+    "EvolutionPath",
+    "EvolutionPathVisualizer",
     "set_mpl_fonts",
     "add_grid",
 ]
