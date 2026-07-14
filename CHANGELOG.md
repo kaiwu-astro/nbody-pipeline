@@ -116,7 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `annotate_binary_states` -- pure/vectorized decoders for the raw binary
   centre-of-mass `cm_kw` (HDF5 Item 160) and member `kw_1`/`kw_2` (Item 158/159)
   codes, for the Gaia-BH-analog step2 evolution-path study
-  (`examples/gaia_bh_formation/step2/`).
+  (`examples/gaia_bh_formation/step2/`). Also decodes `cm_kw == -1` (`chaos.f`'s
+  Mardling 1995 chaotic-tidal-interaction state, unrelated to mass transfer --
+  ~11% of rows on real 0sb target-binary data).
 - `nbody_pipeline.analysis.physics.binding_energy_nb`/`ebind_over_kt`: binding-energy
   helpers reproducing `hdf5_reader.py`'s existing `Ebind_abs_NBODY`/`Ebind/kT` formulas
   exactly, so step2 binding-energy continuity checks stay numerically comparable to
