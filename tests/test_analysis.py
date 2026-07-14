@@ -18,9 +18,13 @@ from nbody_pipeline.analysis import (
 )
 from nbody_pipeline.analysis.galactic_energy_angular_momentum import (
     E_GAL_COL,
+    E_GAL_SPECIFIC_COL,
     E_KIN_GAL_COL,
+    E_KIN_GAL_SPECIFIC_COL,
     E_POT_GAL_COL,
+    E_POT_GAL_SPECIFIC_COL,
     L_Z_GAL_COL,
+    L_Z_GAL_SPECIFIC_COL,
 )
 
 
@@ -751,6 +755,8 @@ class TestGalacticEnergyAngularMomentumProcessor:
         )
         scalar = pd.Series(
             {
+                "RBAR": 1.0,
+                "VSTAR": 1.0,
                 "RG(1)": 0.0,
                 "RG(2)": 0.0,
                 "RG(3)": 0.0,
@@ -770,8 +776,13 @@ class TestGalacticEnergyAngularMomentumProcessor:
         np.testing.assert_allclose(result[E_POT_GAL_COL], [-200.0, -600.0])
         np.testing.assert_allclose(result[E_GAL_COL], [-66.0, 141.0])
         np.testing.assert_allclose(result[L_Z_GAL_COL], [4.0, -6.0])
+        np.testing.assert_allclose(result[E_KIN_GAL_SPECIFIC_COL], [0.5 * 134.0, 0.5 * 494.0])
+        np.testing.assert_allclose(result[E_POT_GAL_SPECIFIC_COL], [-100.0, -200.0])
+        np.testing.assert_allclose(result[E_GAL_SPECIFIC_COL], [-33.0, 47.0])
+        np.testing.assert_allclose(result[L_Z_GAL_SPECIFIC_COL], [4.0 / 2.0, -6.0 / 3.0])
 
     def test_raw_rg_vg_offsets_and_pc_to_kpc_conversion(self):
+        """With RBAR=VSTAR=1.0, RG/VG pass through unscaled."""
         processor = GalacticEnergyAngularMomentumProcessor()
         singles = pd.DataFrame(
             {
@@ -786,6 +797,8 @@ class TestGalacticEnergyAngularMomentumProcessor:
         )
         scalar = pd.Series(
             {
+                "RBAR": 1.0,
+                "VSTAR": 1.0,
                 "RG(1)": 800.0,
                 "RG(2)": 1700.0,
                 "RG(3)": 2600.0,
@@ -813,6 +826,106 @@ class TestGalacticEnergyAngularMomentumProcessor:
         np.testing.assert_allclose(observed["phi_rad"], [np.arctan2(2000.0, 1000.0)])
         assert result[L_Z_GAL_COL].iloc[0] == pytest.approx(5.0 * (1.0 * 16.0 - 2.0 * 10.0))
 
+    def test_rg_vg_are_scaled_by_rbar_and_vstar(self):
+        """RG/VG in the HDF5 scalars table are raw N-body units; must be scaled by RBAR/VSTAR.
+
+        Regression test for the bug found 2026-07-13: the scalars table's
+        RG/VG are written by NBODY6++GPU without re-applying RSCALE_OUT/
+        VSCALE_OUT (unlike X1/V1), so they need `* RBAR` / `* VSTAR` before
+        being combined with the already-physical per-star X/V columns.
+        """
+        processor = GalacticEnergyAngularMomentumProcessor()
+        singles = pd.DataFrame(
+            {
+                "M": [1.0],
+                "X [pc]": [0.0],
+                "Y [pc]": [0.0],
+                "Z [pc]": [0.0],
+                "V1": [0.0],
+                "V2": [0.0],
+                "V3": [0.0],
+            }
+        )
+        scalar = pd.Series(
+            {
+                "RBAR": 2.17673,
+                "VSTAR": 33.8996,
+                "RG(1)": 2297.02,
+                "RG(2)": 0.0,
+                "RG(3)": 0.0,
+                "VG(1)": 0.0,
+                "VG(2)": 7.06852,
+                "VG(3)": 12.2429,
+            }
+        )
+        observed = {}
+
+        def fake_potential(radius_kpc, z_kpc, phi_rad):
+            observed["radius_kpc"] = radius_kpc
+            return np.array([0.0])
+
+        with patch(
+            "nbody_pipeline.analysis.galactic_energy_angular_momentum._evaluate_mw_potential",
+            side_effect=fake_potential,
+        ):
+            result = processor.compute_snapshot(singles, scalar)
+
+        np.testing.assert_allclose(observed["radius_kpc"], [5.0], rtol=1e-4)
+        expected_vg_kms = np.array([0.0, 7.06852, 12.2429]) * 33.8996
+        expected_kin_specific = 0.5 * float(np.sum(expected_vg_kms**2))
+        assert result[E_KIN_GAL_SPECIFIC_COL].iloc[0] == pytest.approx(expected_kin_specific)
+
+    def test_evaluate_mw_potential_uses_physical_kpc_not_natural_units(self):
+        """Regression test for the 2026-07-13 bug: bare floats passed to a
+        physical-units-on galpy potential are read as natural (ro/vo-scaled)
+        units, silently evaluating 8x too far out (ro=8). Attaching astropy
+        units fixes this; values below are galpy's own MWPotential2014
+        physical-unit potential at the solar radius and at 5 kpc.
+        """
+        import nbody_pipeline.analysis.galactic_energy_angular_momentum as module
+
+        at_solar_radius = module._evaluate_mw_potential(
+            np.array([8.0]), np.array([0.0]), np.array([0.0])
+        )
+        at_5kpc = module._evaluate_mw_potential(np.array([5.0]), np.array([0.0]), np.array([0.0]))
+
+        assert at_solar_radius[0] == pytest.approx(-66470.17, rel=1e-4)
+        assert at_5kpc[0] == pytest.approx(-90006.34, rel=1e-4)
+        # The pre-fix bug returned a much shallower (less negative) value
+        # because it evaluated at 8x the intended radius.
+        assert at_solar_radius[0] < -10000.0
+
+    def test_compute_cluster_com_specific_and_mass_weighted(self):
+        processor = GalacticEnergyAngularMomentumProcessor()
+        scalar = pd.Series(
+            {
+                "RBAR": 2.0,
+                "VSTAR": 10.0,
+                "RG(1)": 400.0,
+                "RG(2)": 0.0,
+                "RG(3)": 0.0,
+                "VG(1)": 0.0,
+                "VG(2)": 22.0,
+                "VG(3)": 0.0,
+            }
+        )
+        with patch(
+            "nbody_pipeline.analysis.galactic_energy_angular_momentum._evaluate_mw_potential",
+            return_value=np.array([-500.0]),
+        ):
+            com_no_mass = processor.compute_cluster_com(scalar)
+            com_with_mass = processor.compute_cluster_com(scalar, representative_mass_msun=2.0)
+
+        # RG(1)*RBAR = 800 pc -> x_kpc = 0.8; VG(2)*VSTAR = 220 km/s
+        assert com_no_mass[E_KIN_GAL_SPECIFIC_COL] == pytest.approx(0.5 * 220.0**2)
+        assert com_no_mass[E_POT_GAL_SPECIFIC_COL] == pytest.approx(-500.0)
+        assert com_no_mass[E_GAL_SPECIFIC_COL] == pytest.approx(0.5 * 220.0**2 - 500.0)
+        assert com_no_mass[L_Z_GAL_SPECIFIC_COL] == pytest.approx(0.8 * 220.0)
+        assert E_KIN_GAL_COL not in com_no_mass
+
+        assert com_with_mass[E_GAL_COL] == pytest.approx(2.0 * (0.5 * 220.0**2 - 500.0))
+        assert com_with_mass[L_Z_GAL_COL] == pytest.approx(2.0 * 0.8 * 220.0)
+
     def test_mwpotential_info_log_only_once(self, caplog):
         import nbody_pipeline.analysis.galactic_energy_angular_momentum as module
 
@@ -831,6 +944,8 @@ class TestGalacticEnergyAngularMomentumProcessor:
         )
         scalar = pd.Series(
             {
+                "RBAR": 1.0,
+                "VSTAR": 1.0,
                 "RG(1)": 0.0,
                 "RG(2)": 0.0,
                 "RG(3)": 0.0,
@@ -1196,10 +1311,12 @@ class TestSimulationPlotterGalacticEnergyAngularMomentum:
         config.skip_existing_plot = skip_existing
         config.galactic_energy_angular_momentum = {"enabled": enabled}
 
-        singles = pd.DataFrame({"TTOT": [1.0], "value": [1]})
+        singles = pd.DataFrame({"TTOT": [1.0], "value": [1], "M": [2.0]})
         scalars = pd.DataFrame(
             {
                 "TTOT": [1.0],
+                "RBAR": [1.0],
+                "VSTAR": [1.0],
                 "RG(1)": [0.0],
                 "RG(2)": [0.0],
                 "RG(3)": [0.0],
@@ -1225,15 +1342,25 @@ class TestSimulationPlotterGalacticEnergyAngularMomentum:
         single_visualizer.galactic_energy_angular_momentum_plot_jpg_path.return_value = (
             "/tmp/existing.jpg"
         )
+        single_visualizer.galactic_energy_angular_momentum_specific_plot_jpg_path.return_value = (
+            "/tmp/existing_specific.jpg"
+        )
+        single_visualizer.galactic_kinetic_energy_specific_plot_jpg_path.return_value = (
+            "/tmp/existing_ke.jpg"
+        )
         plotter.galactic_energy_angular_momentum_processor = Mock()
         galactic_df = pd.DataFrame({"TTOT": [1.0], E_GAL_COL: [1.0], L_Z_GAL_COL: [2.0]})
         plotter.galactic_energy_angular_momentum_processor.compute_snapshot.return_value = (
             galactic_df
         )
-        return plotter, singles, scalars.iloc[0], path_exists
+        com_point = {E_GAL_COL: -1.0, L_Z_GAL_COL: 0.5}
+        plotter.galactic_energy_angular_momentum_processor.compute_cluster_com.return_value = (
+            com_point
+        )
+        return plotter, singles, scalars.iloc[0], path_exists, com_point
 
     def test_plot_hdf5_file_calls_processor_and_visualizer_when_enabled(self):
-        plotter, singles, scalar, path_exists = self._plotter(enabled=True)
+        plotter, singles, scalar, path_exists, com_point = self._plotter(enabled=True)
 
         with patch("nbody_pipeline.__main__.os.path.exists", return_value=path_exists):
             plotter.plot_hdf5_file("/tmp/snap.40_1.0.h5part", "test_simu")
@@ -1242,10 +1369,26 @@ class TestSimulationPlotterGalacticEnergyAngularMomentum:
         call_args = plotter.galactic_energy_angular_momentum_processor.compute_snapshot.call_args
         pd.testing.assert_frame_equal(call_args.args[0], singles)
         pd.testing.assert_series_equal(call_args.args[1], scalar)
-        plotter.hdf5_visualizer.single.create_galactic_energy_angular_momentum_plot_jpg.assert_called_once()
+
+        com_call_args = (
+            plotter.galactic_energy_angular_momentum_processor.compute_cluster_com.call_args
+        )
+        pd.testing.assert_series_equal(com_call_args.args[0], scalar)
+        assert com_call_args.kwargs["representative_mass_msun"] == pytest.approx(2.0)
+
+        single_visualizer = plotter.hdf5_visualizer.single
+        single_visualizer.create_galactic_energy_angular_momentum_plot_jpg.assert_called_once()
+        assert (
+            single_visualizer.create_galactic_energy_angular_momentum_plot_jpg.call_args.kwargs[
+                "com_point"
+            ]
+            == com_point
+        )
+        single_visualizer.create_galactic_energy_angular_momentum_specific_plot_jpg.assert_called_once()
+        single_visualizer.create_galactic_kinetic_energy_specific_plot_jpg.assert_called_once()
 
     def test_plot_hdf5_file_skips_when_disabled(self):
-        plotter, _, _, path_exists = self._plotter(enabled=False)
+        plotter, _, _, path_exists, _ = self._plotter(enabled=False)
 
         with patch("nbody_pipeline.__main__.os.path.exists", return_value=path_exists):
             plotter.plot_hdf5_file("/tmp/snap.40_1.0.h5part", "test_simu")
@@ -1254,7 +1397,7 @@ class TestSimulationPlotterGalacticEnergyAngularMomentum:
         plotter.hdf5_visualizer.single.create_galactic_energy_angular_momentum_plot_jpg.assert_not_called()
 
     def test_plot_hdf5_file_skips_compute_when_existing_jpg_is_reused(self):
-        plotter, _, _, path_exists = self._plotter(skip_existing=True, path_exists=True)
+        plotter, _, _, path_exists, _ = self._plotter(skip_existing=True, path_exists=True)
 
         with patch("nbody_pipeline.__main__.os.path.exists", return_value=path_exists):
             plotter.plot_hdf5_file("/tmp/snap.40_1.0.h5part", "test_simu")

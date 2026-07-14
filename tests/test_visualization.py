@@ -484,6 +484,114 @@ class TestSingleStarVisualizer:
 
         scatter.assert_not_called()
 
+    def test_galactic_energy_angular_momentum_specific_and_ke_plot_paths(
+        self, mock_config, sample_dataframe
+    ):
+        vis = SingleStarVisualizer(mock_config)
+
+        assert (
+            vis.galactic_energy_angular_momentum_specific_plot_jpg_path(
+                sample_dataframe, "test_sim"
+            )
+            == "/tmp/plots/jpg/test_output_ttot_1.0_galactic_E_vs_Lz_specific.jpg"
+        )
+        assert (
+            vis.galactic_kinetic_energy_specific_plot_jpg_path(sample_dataframe, "test_sim")
+            == "/tmp/plots/jpg/test_output_ttot_1.0_galactic_KE_vs_Lz_specific.jpg"
+        )
+
+    def test_galactic_energy_angular_momentum_specific_plot_uses_specific_columns(
+        self, mock_config, tmp_path, monkeypatch
+    ):
+        mock_config.plot_dir = str(tmp_path)
+        (tmp_path / "jpg").mkdir()
+        vis = SingleStarVisualizer(mock_config)
+        df = pd.DataFrame(
+            {
+                "TTOT": [1.0] * 3,
+                "Time[Myr]": [10.0] * 3,
+                "TTOT/TCR0": [5.0] * 3,
+                "TTOT/TRH0": [2.0] * 3,
+                "L_z_gal_specific[kpc*km/s]": [0.0, 10.0, 20.0],
+                "E_gal_specific[(km/s)^2]": [-100.0, -50.0, 0.0],
+            }
+        )
+        saved_paths = []
+        monkeypatch.setattr(
+            plt.Figure, "savefig", lambda self, path, *a, **k: saved_paths.append(Path(path))
+        )
+
+        vis.create_galactic_energy_angular_momentum_specific_plot_jpg(df, "test_sim")
+
+        assert saved_paths == [
+            tmp_path / "jpg" / "test_output_ttot_1.0_galactic_E_vs_Lz_specific.jpg"
+        ]
+
+    def test_galactic_kinetic_energy_specific_plot_uses_ke_column(
+        self, mock_config, tmp_path, monkeypatch
+    ):
+        mock_config.plot_dir = str(tmp_path)
+        (tmp_path / "jpg").mkdir()
+        vis = SingleStarVisualizer(mock_config)
+        df = pd.DataFrame(
+            {
+                "TTOT": [1.0] * 3,
+                "Time[Myr]": [10.0] * 3,
+                "TTOT/TCR0": [5.0] * 3,
+                "TTOT/TRH0": [2.0] * 3,
+                "L_z_gal_specific[kpc*km/s]": [0.0, 10.0, 20.0],
+                "E_kin_gal_specific[(km/s)^2]": [1.0, 2.0, 3.0],
+            }
+        )
+        saved_paths = []
+        monkeypatch.setattr(
+            plt.Figure, "savefig", lambda self, path, *a, **k: saved_paths.append(Path(path))
+        )
+
+        vis.create_galactic_kinetic_energy_specific_plot_jpg(df, "test_sim")
+
+        assert saved_paths == [
+            tmp_path / "jpg" / "test_output_ttot_1.0_galactic_KE_vs_Lz_specific.jpg"
+        ]
+
+    def test_galactic_plot_com_overlay_expands_limits_and_adds_marker(
+        self, mock_config, tmp_path, monkeypatch
+    ):
+        mock_config.plot_dir = str(tmp_path)
+        (tmp_path / "jpg").mkdir()
+        vis = SingleStarVisualizer(mock_config)
+        df = pd.DataFrame(
+            {
+                "TTOT": [1.0] * 5,
+                "Time[Myr]": [10.0] * 5,
+                "TTOT/TCR0": [5.0] * 5,
+                "TTOT/TRH0": [2.0] * 5,
+                "L_z_gal[Msun*kpc*km/s]": [0.0, 10.0, 20.0, 30.0, 40.0],
+                "E_gal[Msun*(km/s)^2]": [-100.0, -50.0, 0.0, 50.0, 100.0],
+            }
+        )
+        # far outside the [25, 75] percentile-clipped range of the scatter
+        com_point = {
+            "L_z_gal[Msun*kpc*km/s]": 5000.0,
+            "E_gal[Msun*(km/s)^2]": -5000.0,
+        }
+        scatter_calls = []
+        monkeypatch.setattr(plt.Figure, "savefig", lambda self, path, *a, **k: None)
+        real_ax_scatter = plt.Axes.scatter
+
+        def spy_ax_scatter(self, *args, **kwargs):
+            scatter_calls.append(kwargs)
+            return real_ax_scatter(self, *args, **kwargs)
+
+        monkeypatch.setattr(plt.Axes, "scatter", spy_ax_scatter)
+
+        vis.create_galactic_energy_angular_momentum_plot_jpg(df, "test_sim", com_point=com_point)
+
+        com_calls = [c for c in scatter_calls if c.get("label") == "Cluster COM"]
+        assert len(com_calls) == 1
+        assert com_calls[0]["marker"] == "*"
+        plt.close("all")
+
 
 class TestBinaryStarVisualizer:
     """Test BinaryStarVisualizer class"""

@@ -157,22 +157,42 @@ class SimulationPlotter:
             # 彩色CMD图
             self.hdf5_visualizer.single.create_color_CMD_jpg(single_df_at_t, simu_name)
             if self.config.galactic_energy_angular_momentum.get("enabled", True):
-                galactic_e_lz_path = (
-                    self.hdf5_visualizer.single.galactic_energy_angular_momentum_plot_jpg_path(
+                galactic_single = self.hdf5_visualizer.single
+                galactic_paths = [
+                    galactic_single.galactic_energy_angular_momentum_plot_jpg_path(
                         single_df_at_t, simu_name
-                    )
-                )
-                if not (self.config.skip_existing_plot and os.path.exists(galactic_e_lz_path)):
+                    ),
+                    galactic_single.galactic_energy_angular_momentum_specific_plot_jpg_path(
+                        single_df_at_t, simu_name
+                    ),
+                    galactic_single.galactic_kinetic_energy_specific_plot_jpg_path(
+                        single_df_at_t, simu_name
+                    ),
+                ]
+                all_galactic_plots_exist = all(os.path.exists(p) for p in galactic_paths)
+                if not (self.config.skip_existing_plot and all_galactic_plots_exist):
                     galactic_e_lz_df = (
                         self.galactic_energy_angular_momentum_processor.compute_snapshot(
                             single_df_at_t, scalar_row_at_t
                         )
                     )
-                    self.hdf5_visualizer.single.create_galactic_energy_angular_momentum_plot_jpg(
-                        galactic_e_lz_df, simu_name
+                    # Cluster COM overlay, mass-weighted to the mean stellar mass in this
+                    # snapshot so it lands on the same visual scale as the per-star scatter.
+                    com_point = self.galactic_energy_angular_momentum_processor.compute_cluster_com(
+                        scalar_row_at_t,
+                        representative_mass_msun=float(single_df_at_t["M"].mean()),
+                    )
+                    galactic_single.create_galactic_energy_angular_momentum_plot_jpg(
+                        galactic_e_lz_df, simu_name, com_point=com_point
+                    )
+                    galactic_single.create_galactic_energy_angular_momentum_specific_plot_jpg(
+                        galactic_e_lz_df, simu_name, com_point=com_point
+                    )
+                    galactic_single.create_galactic_kinetic_energy_specific_plot_jpg(
+                        galactic_e_lz_df, simu_name, com_point=com_point
                     )
                 else:
-                    logger.debug(f"Skip existing plot: {galactic_e_lz_path}")
+                    logger.debug(f"Skip existing plots: {galactic_paths}")
             # 速度-位置 # 不知为何非常非常慢，先不弄
             # self.hdf5_visualizer.single.create_vx_x_plot_density(single_df_at_t, simu_name)
 

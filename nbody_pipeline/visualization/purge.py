@@ -42,6 +42,16 @@ SINGLE_TARGETS: tuple[PlotTarget, ...] = (
         "create_galactic_energy_angular_momentum_plot_jpg",
         "galactic_E_vs_Lz",
     ),
+    PlotTarget(
+        "single",
+        "create_galactic_energy_angular_momentum_specific_plot_jpg",
+        "galactic_E_vs_Lz_specific",
+    ),
+    PlotTarget(
+        "single",
+        "create_galactic_kinetic_energy_specific_plot_jpg",
+        "galactic_KE_vs_Lz_specific",
+    ),
     PlotTarget("single", "create_position_plot_jpg", "x1_vs_x2", True),
     PlotTarget("single", "create_position_plot_wide_pc_jpg", "x1_vs_x2_wide_pc"),
     PlotTarget(

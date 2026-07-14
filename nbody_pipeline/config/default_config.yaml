@@ -173,3 +173,8 @@ column_labels:
   'Bin cm V1': "Bin $V_{x,cm}$ [km/s]"
   'Bin cm V2': "Bin $V_{y,cm}$ [km/s]"
   'Bin cm V3': "Bin $V_{z,cm}$ [km/s]"
+  'E_gal[Msun*(km/s)^2]': "$E_{gal}$ [M$_\\odot$(km/s)$^2$]"
+  'L_z_gal[Msun*kpc*km/s]': "$L_{z,gal}$ [M$_\\odot$ kpc km/s]"
+  'E_gal_specific[(km/s)^2]': "$E_{gal}$/m [(km/s)$^2$]"
+  'E_kin_gal_specific[(km/s)^2]': "$E_{kin,gal}$/m [(km/s)$^2$]"
+  'L_z_gal_specific[kpc*km/s]': "$L_{z,gal}$/m [kpc km/s]"

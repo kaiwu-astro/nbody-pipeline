@@ -11,7 +11,13 @@ import pandas as pd
 import seaborn as sns
 
 from nbody_pipeline.utils import log_time
-from nbody_pipeline.analysis.galactic_energy_angular_momentum import E_GAL_COL, L_Z_GAL_COL
+from nbody_pipeline.analysis.galactic_energy_angular_momentum import (
+    E_GAL_COL,
+    E_GAL_SPECIFIC_COL,
+    E_KIN_GAL_SPECIFIC_COL,
+    L_Z_GAL_COL,
+    L_Z_GAL_SPECIFIC_COL,
+)
 from nbody_pipeline.visualization.base import BaseHDF5Visualizer, add_grid
 from nbody_pipeline.visualization.purge import PlotPurger, PurgeResult
 
@@ -25,6 +31,8 @@ class SingleStarVisualizer(BaseHDF5Visualizer):
     ORBITAL_X_T_COL = "x_T [pc]"
     ORBITAL_X_L_COL = "x_L [pc]"
     GALACTIC_E_LZ_FILENAME_VAR_PART = "galactic_E_vs_Lz"
+    GALACTIC_E_LZ_SPECIFIC_FILENAME_VAR_PART = "galactic_E_vs_Lz_specific"
+    GALACTIC_KE_LZ_SPECIFIC_FILENAME_VAR_PART = "galactic_KE_vs_Lz_specific"
 
     def _save_position_figure(self, fig: plt.Figure, ax: plt.Axes, save_jpg_path: str) -> None:
         """Save position plots with fixed canvas size and square data axes."""
@@ -33,14 +41,38 @@ class SingleStarVisualizer(BaseHDF5Visualizer):
         with mpl.rc_context({"savefig.bbox": None}):
             fig.savefig(save_jpg_path, transparent=False)
 
-    def galactic_energy_angular_momentum_plot_jpg_path(
-        self, df_at_t: pd.DataFrame, simu_name: str
+    def _galactic_plot_jpg_path(
+        self, df_at_t: pd.DataFrame, simu_name: str, filename_var_part: str
     ) -> str:
-        """Return the JPG path for the snapshot galactic E-vs-Lz plot."""
+        """Return the JPG path for a snapshot galactic scatter plot."""
         ttot = df_at_t["TTOT"].iloc[0]
         return (
             f"{self.config.plot_dir}/jpg/{self.config.figname_prefix[simu_name]}"
-            f"output_ttot_{ttot}_{self.GALACTIC_E_LZ_FILENAME_VAR_PART}.jpg"
+            f"output_ttot_{ttot}_{filename_var_part}.jpg"
+        )
+
+    def galactic_energy_angular_momentum_plot_jpg_path(
+        self, df_at_t: pd.DataFrame, simu_name: str
+    ) -> str:
+        """Return the JPG path for the snapshot galactic (mass-weighted) E-vs-Lz plot."""
+        return self._galactic_plot_jpg_path(
+            df_at_t, simu_name, self.GALACTIC_E_LZ_FILENAME_VAR_PART
+        )
+
+    def galactic_energy_angular_momentum_specific_plot_jpg_path(
+        self, df_at_t: pd.DataFrame, simu_name: str
+    ) -> str:
+        """Return the JPG path for the snapshot galactic specific (per-unit-mass) E-vs-Lz plot."""
+        return self._galactic_plot_jpg_path(
+            df_at_t, simu_name, self.GALACTIC_E_LZ_SPECIFIC_FILENAME_VAR_PART
+        )
+
+    def galactic_kinetic_energy_specific_plot_jpg_path(
+        self, df_at_t: pd.DataFrame, simu_name: str
+    ) -> str:
+        """Return the JPG path for the snapshot galactic specific KE-vs-Lz plot."""
+        return self._galactic_plot_jpg_path(
+            df_at_t, simu_name, self.GALACTIC_KE_LZ_SPECIFIC_FILENAME_VAR_PART
         )
 
     def purge(
@@ -106,27 +138,51 @@ class SingleStarVisualizer(BaseHDF5Visualizer):
             custom_ax_joint_decorator=_custom_decorator,
         )
 
-    @log_time(logger)
-    def create_galactic_energy_angular_momentum_plot_jpg(
-        self, df_at_t: pd.DataFrame, simu_name: str
+    def _create_galactic_scatter_plot_jpg(
+        self,
+        df_at_t: pd.DataFrame,
+        simu_name: str,
+        x_col: str,
+        y_col: str,
+        filename_var_part: str,
+        com_point: Optional[dict] = None,
     ) -> None:
-        """Create a snapshot galactic total-energy versus ``L_z`` plot."""
-        save_jpg_path = self.galactic_energy_angular_momentum_plot_jpg_path(df_at_t, simu_name)
+        """Create a snapshot galactic scatter plot for one ``(x_col, y_col)`` pair.
+
+        If ``com_point`` has entries for ``x_col``/``y_col`` (see
+        ``GalacticEnergyAngularMomentumProcessor.compute_cluster_com``), the
+        cluster COM is overlaid as a star marker and the axis limits are
+        widened if needed so it stays visible even when it falls outside the
+        percentile-clipped range of the per-star scatter.
+        """
+        save_jpg_path = self._galactic_plot_jpg_path(df_at_t, simu_name, filename_var_part)
         if self.config.skip_existing_plot and os.path.exists(save_jpg_path):
             logger.debug(f"Skip existing plot: {save_jpg_path}")
             return
 
-        finite_mask = np.isfinite(df_at_t[L_Z_GAL_COL]) & np.isfinite(df_at_t[E_GAL_COL])
+        finite_mask = np.isfinite(df_at_t[x_col]) & np.isfinite(df_at_t[y_col])
         plot_df = df_at_t.loc[finite_mask]
         if plot_df.empty:
-            logger.warning("Skipping galactic E-vs-Lz plot because no finite points are available")
+            logger.warning(
+                f"Skipping {filename_var_part} plot because no finite points are available"
+            )
             return
 
         plot_config = getattr(self.config, "galactic_energy_angular_momentum", {}) or {}
         percentile_limits = plot_config.get("percentile_limits", [0.1, 99.9])
         low_pct, high_pct = float(percentile_limits[0]), float(percentile_limits[1])
-        xlim = tuple(np.percentile(plot_df[L_Z_GAL_COL].to_numpy(dtype=float), [low_pct, high_pct]))
-        ylim = tuple(np.percentile(plot_df[E_GAL_COL].to_numpy(dtype=float), [low_pct, high_pct]))
+        xlim = list(np.percentile(plot_df[x_col].to_numpy(dtype=float), [low_pct, high_pct]))
+        ylim = list(np.percentile(plot_df[y_col].to_numpy(dtype=float), [low_pct, high_pct]))
+
+        com_xy = None
+        if com_point is not None and x_col in com_point and y_col in com_point:
+            com_xy = (float(com_point[x_col]), float(com_point[y_col]))
+            x_pad = 0.05 * (xlim[1] - xlim[0])
+            y_pad = 0.05 * (ylim[1] - ylim[0])
+            xlim[0] = min(xlim[0], com_xy[0] - x_pad)
+            xlim[1] = max(xlim[1], com_xy[0] + x_pad)
+            ylim[0] = min(ylim[0], com_xy[1] - y_pad)
+            ylim[1] = max(ylim[1], com_xy[1] + y_pad)
 
         ttot = df_at_t["TTOT"].iloc[0]
         tmyr = df_at_t["Time[Myr]"].iloc[0]
@@ -137,8 +193,8 @@ class SingleStarVisualizer(BaseHDF5Visualizer):
             fig, ax = plt.subplots()
             sns.scatterplot(
                 data=plot_df,
-                x=L_Z_GAL_COL,
-                y=E_GAL_COL,
+                x=x_col,
+                y=y_col,
                 marker=".",
                 lw=0,
                 s=2,
@@ -146,13 +202,26 @@ class SingleStarVisualizer(BaseHDF5Visualizer):
                 alpha=0.25,
                 ax=ax,
             )
+            if com_xy is not None:
+                ax.scatter(
+                    [com_xy[0]],
+                    [com_xy[1]],
+                    marker="*",
+                    s=220,
+                    color="red",
+                    edgecolors="yellow",
+                    linewidths=0.8,
+                    zorder=5,
+                    label="Cluster COM",
+                )
+                ax.legend(loc="best", fontsize=8, framealpha=0.3)
             self.decorate_jointfig(
                 ax,
                 plot_df,
-                L_Z_GAL_COL,
-                E_GAL_COL,
-                xlim,
-                ylim,
+                x_col,
+                y_col,
+                tuple(xlim),
+                tuple(ylim),
                 simu_name,
                 ttot,
                 tmyr,
@@ -168,6 +237,58 @@ class SingleStarVisualizer(BaseHDF5Visualizer):
                     plt.close(fig)
             except NameError:
                 plt.close(fig)
+
+    @log_time(logger)
+    def create_galactic_energy_angular_momentum_plot_jpg(
+        self, df_at_t: pd.DataFrame, simu_name: str, com_point: Optional[dict] = None
+    ) -> None:
+        """Create a snapshot galactic mass-weighted total-energy versus ``L_z`` plot."""
+        self._create_galactic_scatter_plot_jpg(
+            df_at_t,
+            simu_name,
+            L_Z_GAL_COL,
+            E_GAL_COL,
+            self.GALACTIC_E_LZ_FILENAME_VAR_PART,
+            com_point=com_point,
+        )
+
+    @log_time(logger)
+    def create_galactic_energy_angular_momentum_specific_plot_jpg(
+        self, df_at_t: pd.DataFrame, simu_name: str, com_point: Optional[dict] = None
+    ) -> None:
+        """Create a snapshot galactic specific (per-unit-mass) total-energy versus ``L_z`` plot.
+
+        Unlike the mass-weighted plot, every star's value here depends only
+        on its galactocentric phase-space position, not its own mass, so the
+        scatter is directly comparable to the cluster COM point.
+        """
+        self._create_galactic_scatter_plot_jpg(
+            df_at_t,
+            simu_name,
+            L_Z_GAL_SPECIFIC_COL,
+            E_GAL_SPECIFIC_COL,
+            self.GALACTIC_E_LZ_SPECIFIC_FILENAME_VAR_PART,
+            com_point=com_point,
+        )
+
+    @log_time(logger)
+    def create_galactic_kinetic_energy_specific_plot_jpg(
+        self, df_at_t: pd.DataFrame, simu_name: str, com_point: Optional[dict] = None
+    ) -> None:
+        """Create a snapshot galactic specific kinetic-energy versus ``L_z`` plot.
+
+        Isolates the kinetic-energy term (mass-independent) so it can be
+        checked separately from the potential-energy term when diagnosing
+        why the total-energy-vs-Lz plot looks off.
+        """
+        self._create_galactic_scatter_plot_jpg(
+            df_at_t,
+            simu_name,
+            L_Z_GAL_SPECIFIC_COL,
+            E_KIN_GAL_SPECIFIC_COL,
+            self.GALACTIC_KE_LZ_SPECIFIC_FILENAME_VAR_PART,
+            com_point=com_point,
+        )
 
     @log_time(logger)
     def create_position_plot_jpg(
