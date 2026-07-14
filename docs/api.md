@@ -145,6 +145,36 @@ Known remaining gap: the same "RG/VG are raw N-body units" issue also affects `n
 
 Calculate gravitational wave merger timescales.
 
+### `nbody_pipeline.analysis.kstar_semantics`
+
+Decode raw `cm_kw` (HDF5 Item 160, binary centre-of-mass `KSTAR`) and member `kw_1`/`kw_2` (Item 158/159)
+codes into physical states. The manual's odd/even prose for `cm_kw` is backwards relative to what the
+NBODY6++GPU source (`roche.f`/`expel.f`) actually does; this module follows the code: **odd values >=11
+mean mass transfer is ongoing right now; even values >=10 mean the binary is between episodes** (see the
+module docstring for the full derivation). This matches the pre-existing `hdf5_reader.py`/
+`snapshot_binaries.yaml` convention, which needed no fix. `cm_kw == -1` is a third, unrelated
+convention (`chaos.f`'s Mardling 1995 chaotic-tidal-interaction physics, not mass transfer) --
+common in practice (~11% of rows on real 0sb data).
+
+```python
+from nbody_pipeline.analysis import decode_cm_kstar, decode_member_kw, annotate_binary_states
+
+decode_cm_kstar(11)          # CmKstarState(mt_ongoing=True, mt_phase_index=1, ...)
+decode_member_kw(114)        # (14, True)  -- common-envelope member, base KW 14
+annotated_df = annotate_binary_states(binary_df)  # adds mt_ongoing/mt_past/is_relativistic_binary/...
+```
+
+### `nbody_pipeline.analysis.physics.binding_energy_nb` / `ebind_over_kt`
+
+`binding_energy_nb(m1_msun, m2_msun, a_au, *, zmbar_msun, rbar_pc)` reproduces `hdf5_reader.py`'s
+`Ebind_abs_NBODY` formula exactly (reduced mass over twice the semi-major axis, both in N-body units) for
+numerical continuity with existing step1 CSVs. `ebind_over_kt(ebind_nb, eclose_nb)` is a plain division;
+**pass `config.ECLOSE_INPUT` (the fixed constant, default 1.0), not the real per-snapshot
+`snapshot_scalars.eclose_nb`**, to stay numerically consistent with step1's `Ebind/kT`/`is_hard_binary`
+columns. `eclose_nb` genuinely varies over a run (e.g. 0.003-1.0 within 20sb) because `adjust.F` re-tunes
+it, so this is a known normalization limitation of the existing pipeline, not a step2 design choice --
+fixing it properly (using the real time-varying threshold) is tracked as a separate future project.
+
 ## Schema Registry
 
 ### `nbody_pipeline.schemas`
@@ -203,6 +233,38 @@ con.execute("SELECT simulation_id, count(*) FROM compact_object_history GROUP BY
 - `LagrVisualizer`: Visualize Lagrangian radii evolution
 - `GalacticOrbitVisualizer`: Visualize cluster galactic orbits as static 2D projections and Plotly 3D HTML
 - `CollCoalVisualizer`: Visualize collision and coalescence events
+
+### `nbody_pipeline.visualization.evolution_path.EvolutionPathVisualizer`
+
+Reusable Dragon-2-style "evolution path" cartoon diagram (see Rizzuto et al. 2023,
+doi:10.1093/mnras/stad2292 Fig. 1): a vertical sequence of epochs with member stars drawn as circles
+(size ~ mass via `mass_to_display_radius`, colour ~ stellar type via `DEFAULT_KW_COLORS`), binary pairs
+linked by a dashed orbit ellipse or a filled common-envelope blob, and same-object continuity across
+epochs drawn as connecting lines. The data model (`PathMember`, `PathBinary`, `PathEpoch`,
+`EvolutionPath`) is study-agnostic -- callers populate it from whatever analysis they are doing, it does
+not know about `kstar_semantics`.
+
+```python
+from nbody_pipeline.visualization import (
+    EvolutionPath, EvolutionPathVisualizer, PathBinary, PathEpoch, PathMember,
+)
+
+path = EvolutionPath(
+    title="20sb 428467",
+    epochs=[
+        PathEpoch(0.0, [PathMember("A", 25.0, 1), PathMember("B", 20.0, 1)],
+                  [PathBinary(("A", "B"), a=2.0, e=0.1)], event_label="t0 primordial"),
+        PathEpoch(3298.0, [PathMember("A", 8.0, 14), PathMember("C", 15.0, 1)],
+                  [PathBinary(("A", "C"), a=1.4, e=0.45)], event_label="exchange"),
+    ],
+)
+EvolutionPathVisualizer(config).plot(path, "evolution_path_20sb_428467.jpg")
+```
+
+`assign_member_columns(path)` (a pure, matplotlib-free helper) computes the stable per-`object_id`
+horizontal layout: a column, once assigned, never changes; binary members get adjacent columns; a
+column vacated by an object that never reappears is reused by a later, unrelated member, so an
+exchanged-in partner tends to land next to its new companion.
 
 ## Utilities
 
