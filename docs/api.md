@@ -152,7 +152,9 @@ codes into physical states. The manual's odd/even prose for `cm_kw` is backwards
 NBODY6++GPU source (`roche.f`/`expel.f`) actually does; this module follows the code: **odd values >=11
 mean mass transfer is ongoing right now; even values >=10 mean the binary is between episodes** (see the
 module docstring for the full derivation). This matches the pre-existing `hdf5_reader.py`/
-`snapshot_binaries.yaml` convention, which needed no fix.
+`snapshot_binaries.yaml` convention, which needed no fix. `cm_kw == -1` is a third, unrelated
+convention (`chaos.f`'s Mardling 1995 chaotic-tidal-interaction physics, not mass transfer) --
+common in practice (~11% of rows on real 0sb data).
 
 ```python
 from nbody_pipeline.analysis import decode_cm_kstar, decode_member_kw, annotate_binary_states

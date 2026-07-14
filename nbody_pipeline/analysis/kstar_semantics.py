@@ -34,6 +34,13 @@ Member KW codes (Item 158/159, ``kw_1``/``kw_2``) use a separate convention:
 values above 100 flag a common-envelope object, with the "real" stellar type
 recovered by subtracting 100 (see ``expel.f``/``roche.f``,
 e.g. ``IF (KW1.GT.100) KW1 = KW1 - 100``).
+
+``cm_kw == -1`` is a third, unrelated convention: ``chaos.f`` (Mardling 1995
+chaotic-tidal-interaction physics, distinct from Roche-lobe mass transfer)
+sets ``KSTAR(I) = -1`` on the centre-of-mass particle while a highly
+eccentric binary is undergoing chaotic tidal energy dissipation. This is
+common in practice -- on real 0sb data, ~11% of target-binary rows sit at
+cm_kw==-1.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ import numpy as np
 import pandas as pd
 
 RELATIVISTIC_CM_KW = -25
+CHAOTIC_TIDE_CM_KW = -1
 COMMON_ENVELOPE_OFFSET = 100
 
 __all__ = [
@@ -65,6 +73,7 @@ class CmKstarState:
     mt_past: bool
     mt_phase_index: int
     is_relativistic: bool
+    is_chaotic_tide: bool = False
 
 
 def decode_cm_kstar(cm_kw: int) -> CmKstarState:
@@ -83,6 +92,17 @@ def decode_cm_kstar(cm_kw: int) -> CmKstarState:
             mt_past=False,
             mt_phase_index=0,
             is_relativistic=True,
+        )
+
+    if cm_kw == CHAOTIC_TIDE_CM_KW:
+        return CmKstarState(
+            raw=cm_kw,
+            is_standard=False,
+            mt_ongoing=False,
+            mt_past=False,
+            mt_phase_index=0,
+            is_relativistic=False,
+            is_chaotic_tide=True,
         )
 
     if cm_kw < 10:
@@ -137,8 +157,8 @@ def annotate_binary_states(
     """Vectorized version of :func:`decode_cm_kstar`/:func:`decode_member_kw`.
 
     Adds ``mt_ongoing``, ``mt_past``, ``is_relativistic_binary``,
-    ``base_kw_1``, ``base_kw_2``, ``in_ce_1``, ``in_ce_2`` columns to a copy
-    of ``df`` and returns it.
+    ``is_chaotic_tide_binary``, ``base_kw_1``, ``base_kw_2``, ``in_ce_1``,
+    ``in_ce_2`` columns to a copy of ``df`` and returns it.
     """
     out = df.copy()
 
@@ -149,6 +169,7 @@ def annotate_binary_states(
     out["mt_ongoing"] = ge10 & odd
     out["mt_past"] = ge10 & ~odd & (cm_kw > 10)
     out["is_relativistic_binary"] = cm_kw == RELATIVISTIC_CM_KW
+    out["is_chaotic_tide_binary"] = cm_kw == CHAOTIC_TIDE_CM_KW
 
     for kw_col, base_col, ce_col in (
         (kw1_col, "base_kw_1", "in_ce_1"),

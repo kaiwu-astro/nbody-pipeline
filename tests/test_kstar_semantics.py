@@ -66,10 +66,15 @@ class TestDecodeCmKstar:
         assert state.mt_ongoing is False
         assert state.mt_past is False
 
-    def test_negative_other_than_minus_25_is_not_relativistic(self):
+    def test_minus_1_is_chaotic_tide(self):
+        # chaos.f (Mardling 1995 chaotic-tidal-interaction physics) sets
+        # KSTAR(I) = -1 on the c.m. particle; unrelated to mass transfer.
         state = decode_cm_kstar(-1)
+        assert state.is_chaotic_tide is True
         assert state.is_relativistic is False
         assert state.is_standard is False
+        assert state.mt_ongoing is False
+        assert state.mt_past is False
 
 
 class TestDecodeMemberKw:
@@ -90,24 +95,35 @@ class TestAnnotateBinaryStates:
     def test_adds_expected_columns(self):
         df = pd.DataFrame(
             {
-                "cm_kw": [0, 10, 11, 12, -25],
-                "kw_1": [1, 14, 114, 13, 14],
-                "kw_2": [1, 1, 1, 113, 14],
+                "cm_kw": [0, 10, 11, 12, -25, -1],
+                "kw_1": [1, 14, 114, 13, 14, 1],
+                "kw_2": [1, 1, 1, 113, 14, 1],
             }
         )
         out = annotate_binary_states(df)
 
         np.testing.assert_array_equal(
-            out["mt_ongoing"].to_numpy(), [False, False, True, False, False]
+            out["mt_ongoing"].to_numpy(), [False, False, True, False, False, False]
         )
-        np.testing.assert_array_equal(out["mt_past"].to_numpy(), [False, False, False, True, False])
         np.testing.assert_array_equal(
-            out["is_relativistic_binary"].to_numpy(), [False, False, False, False, True]
+            out["mt_past"].to_numpy(), [False, False, False, True, False, False]
         )
-        np.testing.assert_array_equal(out["base_kw_1"].to_numpy(), [1, 14, 14, 13, 14])
-        np.testing.assert_array_equal(out["in_ce_1"].to_numpy(), [False, False, True, False, False])
-        np.testing.assert_array_equal(out["base_kw_2"].to_numpy(), [1, 1, 1, 13, 14])
-        np.testing.assert_array_equal(out["in_ce_2"].to_numpy(), [False, False, False, True, False])
+        np.testing.assert_array_equal(
+            out["is_relativistic_binary"].to_numpy(),
+            [False, False, False, False, True, False],
+        )
+        np.testing.assert_array_equal(
+            out["is_chaotic_tide_binary"].to_numpy(),
+            [False, False, False, False, False, True],
+        )
+        np.testing.assert_array_equal(out["base_kw_1"].to_numpy(), [1, 14, 14, 13, 14, 1])
+        np.testing.assert_array_equal(
+            out["in_ce_1"].to_numpy(), [False, False, True, False, False, False]
+        )
+        np.testing.assert_array_equal(out["base_kw_2"].to_numpy(), [1, 1, 1, 13, 14, 1])
+        np.testing.assert_array_equal(
+            out["in_ce_2"].to_numpy(), [False, False, False, True, False, False]
+        )
 
     def test_does_not_mutate_input(self):
         df = pd.DataFrame({"cm_kw": [10], "kw_1": [1], "kw_2": [1]})
