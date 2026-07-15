@@ -177,14 +177,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BaseHDF5Visualizer._create_jointplot_class_scatter` engine, parallel to
   `_create_jointplot_density`): Ebind/kT-vs-a scatter of all binaries in a snapshot,
   colored by `binary_class` (color-blind-safe palette), with stacked marginal
-  histograms. `_decorator_ebin_semi` now reports three-way hard/soft/temporary counts
-  (was hard/soft) and labels the unchanged `y=1` threshold line as
-  `Ebind = 1e-3*Eclose`. Registered in `__main__.py`'s binary plotting block and
+  histograms. Registered in `__main__.py`'s binary plotting block and
   `visualization/purge.py`'s `BINARY_TARGETS`.
+- `hdf5_reader.py`'s binaries table gains an `eclose_nb` column (the true per-snapshot
+  `ECLOSE` broadcast per row) alongside the existing
+  `mean_core_interparticle_distance[au]`, so plotting code can label the temporary
+  threshold with its actual per-snapshot value instead of just the normalized `y=1`.
 - `examples/soft-hard-temp/run_trial.py`: trial script comparing binary-table
   populations before/after `drop_temporary_binaries` cleanup across 9 representative
   20sb snapshots, focused on the compact-object a-vs-primary-mass plot; writes
   `class_counts.csv` with per-snapshot hard/soft/temporary counts and Ebind/kT ranges.
+
+### Fixed
+- `_decorator_ebin_semi` (`ebind_vs_a` density/compact-object/class-scatter plots): the
+  single horizontal `y=1` line was misleading once hard/soft stopped coming from one
+  threshold -- `temporary` requires *both* `a > d_av` *and* `Ebind/kT < 1`, a corner of
+  the plot, not a line. Now draws two perpendicular dashed segments (horizontal at
+  `y=1` from `x=d_av` rightward, vertical at `x=d_av` from the bottom up to `y=1`)
+  outlining that corner, each labeled along its own direction with the actual
+  per-snapshot criterion value (`Ebind=1e-3*Eclose=<value>`, `a=d_av=<value>`, 2
+  decimal places, scientific notation). The hard/soft/temporary count annotation
+  (already using the new three-way `binary_class` definition -- no data bug there)
+  moved from the top-right corner to the bottom-left (`ax.transAxes`), since the top
+  right is now used by the criterion labels; falls back to bottom-right when the axes
+  already has a table (the compact-object-only variant's Stellar Types count table
+  also sits at `loc="lower left"`, so both must not claim the same corner).
+- `get_all_hdf5_paths`: two different physical files can share the same
+  filename-derived sort index when a simulation's data has been partially
+  re-generated into a different directory with the same basename (confirmed for
+  20sb: `snap.40_0.h5part` exists both under `.../archive/` -- an old, incomplete copy
+  missing the `Bin Label` dataset -- and under `.../snap.40/` -- a later re-generated,
+  complete copy with `Bin Label`). Previously both stayed in the candidate list with a
+  tied sort key, so `_locate_hdf5_path`-style single-match lookups picked whichever
+  file `glob()` happened to traverse first -- for 20sb this silently selected the
+  incomplete `archive/` copy for `TTOT=1.0`, dropping all 35481 real hard binaries at
+  that snapshot into the `-9`-sentinel "unknown" fallback. Now dedupes by
+  filename-index, keeping the larger file (a cheap, reliable proxy for "more complete"
+  without opening every HDF5 file).
+- Documented, not fixable in code: 20sb's raw archived `snap.40_N.h5part` files
+  genuinely lack the `Bin Label` dataset for roughly `TTOT` in `(1, ~600-1000)` --
+  confirmed by direct inspection of `snap.40_9.h5part`/`snap.40_99.h5part`/
+  `snap.40_500.h5part` (no `Bin Label` in any `Step#` group) vs. `snap.40_1000.h5part`
+  onward (present). Per user: `Bin Label` was added to the NBODY6++GPU output code
+  partway through this run, so its absence in the early archived output is expected,
+  not a bug -- the `-9`-sentinel fallback (all binaries classified non-hard) is
+  correct behaviour for that window, not something to work around.
 
 ## [1.0.0] - 2026-07-10
 

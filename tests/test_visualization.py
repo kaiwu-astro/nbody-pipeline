@@ -24,6 +24,7 @@ from nbody_pipeline.visualization import (
     add_grid,
     PlotPurger,
 )
+from nbody_pipeline.visualization.binary_star import _sci_notation_2dp
 
 
 @pytest.fixture(autouse=True)
@@ -130,6 +131,8 @@ def sample_binary_dataframe():
                 np.random.choice(BINARY_CLASS_ORDER, 50), categories=BINARY_CLASS_ORDER
             ),
             "tau_gw[Myr]": np.random.uniform(1, 1000, 50),
+            "mean_core_interparticle_distance[au]": [4010.23] * 50,
+            "eclose_nb": [0.42] * 50,
         }
     )
     df["is_hard_binary"] = df["binary_class"] == "hard"
@@ -599,6 +602,26 @@ class TestSingleStarVisualizer:
         plt.close("all")
 
 
+class TestSciNotation2dp:
+    """Test _sci_notation_2dp mathtext formatting helper"""
+
+    def test_basic_value(self):
+        assert _sci_notation_2dp(4010.23) == "4.01\\times10^{3}"
+
+    def test_small_value(self):
+        assert _sci_notation_2dp(0.00042) == "4.20\\times10^{-4}"
+
+    def test_zero(self):
+        assert _sci_notation_2dp(0.0) == "0.00"
+
+    def test_nan_returns_placeholder(self):
+        assert _sci_notation_2dp(float("nan")) == "\\mathrm{NaN}"
+
+    def test_mantissa_rounds_up_to_next_exponent(self):
+        # 9.996 -> rounds to 10.00 mantissa -> should carry into exponent
+        assert _sci_notation_2dp(9.996) == "1.00\\times10^{1}"
+
+
 class TestBinaryStarVisualizer:
     """Test BinaryStarVisualizer class"""
 
@@ -710,6 +733,77 @@ class TestBinaryStarVisualizer:
         assert any("2 hard" in t for t in texts)
         assert any("1 soft" in t for t in texts)
         assert any("1 temporary" in t for t in texts)
+        plt.close(ax.figure)
+
+    def test_decorator_ebin_semi_draws_corner_not_full_line(self, mock_config):
+        """With d_av/eclose_nb present, draws two perpendicular segments framing
+        the temporary corner instead of one full-width y=1 line."""
+        vis = BinaryStarVisualizer(mock_config)
+        _, ax = plt.subplots()
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlim(0.01, 1e5)
+        ax.set_ylim(1e-4, 1e9)
+        df = pd.DataFrame(
+            {
+                "binary_class": pd.Categorical(["hard", "soft"], categories=BINARY_CLASS_ORDER),
+                "mean_core_interparticle_distance[au]": [4010.23, 4010.23],
+                "eclose_nb": [0.42, 0.42],
+            }
+        )
+
+        vis._decorator_ebin_semi(ax, df)
+
+        lines = ax.get_lines()
+        assert len(lines) == 2
+        horizontal = next(ln for ln in lines if ln.get_ydata()[0] == ln.get_ydata()[1])
+        vertical = next(ln for ln in lines if ln.get_xdata()[0] == ln.get_xdata()[1])
+        assert horizontal.get_xdata()[0] == pytest.approx(4010.23)
+        assert horizontal.get_ydata()[0] == pytest.approx(1.0)
+        assert vertical.get_xdata()[0] == pytest.approx(4010.23)
+        assert vertical.get_ydata()[1] == pytest.approx(1.0)
+        texts = [t.get_text() for t in ax.texts]
+        assert any("E_{bind}" in t and "10^{-3}" in t for t in texts)
+        assert any("d_{av}" in t for t in texts)
+        plt.close(ax.figure)
+
+    def test_decorator_ebin_semi_counts_avoid_existing_table(self, mock_config):
+        """The compact-object-only variant already draws a Stellar Types count
+        table at loc='lower left'; the binary_class counts must not overlap it."""
+        vis = BinaryStarVisualizer(mock_config)
+        _, ax = plt.subplots()
+        ax.set_xlim(0.01, 1e5)
+        ax.set_ylim(1e-4, 1e9)
+        ax.table(cellText=[["MS-MS", 1]], colLabels=["Stellar Type", "count"], loc="lower left")
+        df = pd.DataFrame({"binary_class": pd.Categorical(["hard"], categories=BINARY_CLASS_ORDER)})
+
+        vis._decorator_ebin_semi(ax, df)
+
+        counts_text = next(t for t in ax.texts if "1 hard" in t.get_text())
+        assert counts_text.get_ha() == "right"
+        assert counts_text.get_position()[0] == pytest.approx(0.98)
+        plt.close(ax.figure)
+
+    def test_decorator_ebin_semi_skips_lines_when_d_av_nan(self, mock_config):
+        """t=0-like frames (NC/RC undefined -> d_av NaN) skip the corner lines
+        but still render counts, rather than raising."""
+        vis = BinaryStarVisualizer(mock_config)
+        _, ax = plt.subplots()
+        ax.set_xlim(0.01, 1e5)
+        ax.set_ylim(1e-4, 1e9)
+        df = pd.DataFrame(
+            {
+                "binary_class": pd.Categorical(["soft"], categories=BINARY_CLASS_ORDER),
+                "mean_core_interparticle_distance[au]": [np.nan],
+                "eclose_nb": [np.nan],
+            }
+        )
+
+        vis._decorator_ebin_semi(ax, df)
+
+        assert len(ax.get_lines()) == 0
+        texts = [t.get_text() for t in ax.texts]
+        assert any("1 soft" in t for t in texts)
         plt.close(ax.figure)
 
 

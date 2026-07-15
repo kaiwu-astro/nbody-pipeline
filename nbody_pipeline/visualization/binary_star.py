@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from nbody_pipeline.analysis.physics import BINARY_CLASS_ORDER
+from nbody_pipeline.analysis.physics import BINARY_CLASS_ORDER, TEMPORARY_EBIND_FACTOR
 from nbody_pipeline.utils import log_time
 from nbody_pipeline.visualization.base import BaseHDF5Visualizer, add_grid
 from nbody_pipeline.visualization.purge import PlotPurger, PurgeResult
@@ -23,6 +23,21 @@ BINARY_CLASS_PALETTE = {
     "soft": "#0072b2",
     "temporary": "#999999",
 }
+
+
+def _sci_notation_2dp(value: float) -> str:
+    """Mathtext scientific notation, 2 decimal places in the mantissa (e.g. ``1.23\\times10^{-4}``)."""
+    if not np.isfinite(value):
+        return "\\mathrm{NaN}"
+    if value == 0:
+        return "0.00"
+    exponent = int(np.floor(np.log10(abs(value))))
+    mantissa = value / 10.0**exponent
+    mantissa = round(mantissa, 2)
+    if abs(mantissa) >= 10:
+        mantissa /= 10.0
+        exponent += 1
+    return f"{mantissa:.2f}\\times10^{{{exponent}}}"
 
 
 class BinaryStarVisualizer(BaseHDF5Visualizer):
@@ -296,27 +311,66 @@ class BinaryStarVisualizer(BaseHDF5Visualizer):
         )
 
     def _decorator_ebin_semi(self, ax: plt.Axes, df: pd.DataFrame) -> None:
-        """Decorator to add hard/soft threshold line and hard/soft/temporary statistics.
+        """Decorator to frame the temporary-binary region and annotate hard/soft/temporary counts.
 
-        Under the new ``Ebind/kT`` normalization (denominator =
-        ``TEMPORARY_EBIND_FACTOR * ECLOSE``), ``y=1`` is exactly the
-        temporary-binary energy threshold ``Ebind = 1e-3*Eclose`` -- the
-        existing line at ``y=1`` stays, only its label changes. Counts come
-        from the three-way ``binary_class`` column; if that column is
-        missing (older callers / mocks), degrades to drawing just the line.
+        ``temporary`` requires *both* ``a > d_av`` *and* ``Ebind/kT < 1`` (see
+        ``classify_binaries``) -- a corner of the plot, not a single line.
+        A single horizontal ``y=1`` line (the old behaviour) is misleading
+        now that hard/soft no longer come from one threshold. Instead this
+        draws two perpendicular dashed segments that outline that corner:
+        a horizontal segment at ``y=1`` from ``x=d_av`` to the right edge,
+        and a vertical segment at ``x=d_av`` from the bottom edge to ``y=1``.
+        Each segment is labeled, text running along the segment direction,
+        with the actual per-snapshot criterion value (``d_av`` varies with
+        ``NC``/``RC``/``RBAR``; the ``Ebind`` threshold varies with ``ECLOSE``).
+        If ``d_av``/``eclose_nb`` are unavailable (missing columns, empty df,
+        or NaN -- e.g. ``t=0`` before ``adjust.F`` defines a core), the lines
+        are skipped but counts still render if ``binary_class`` is present.
+
+        Counts come from the three-way ``binary_class`` column (already the
+        new hard/temporary/soft definition -- see ``classify_binaries``); if
+        that column is missing (older callers / mocks), nothing is drawn.
         """
-        ax.axhline(y=1, linestyle="--", color="darkred", linewidth=1.5)
-        xmax = ax.get_xlim()[1]
+        xmin, xmax = ax.get_xlim()
+        ymin, ymax = ax.get_ylim()
         with mpl.rc_context(**self.config.fixed_width_font_context):
-            ax.text(
-                xmax,
-                1.0,
-                "$E_{bind}=10^{-3}E_{close}$",
-                color="darkred",
-                fontsize=9,
-                ha="right",
-                va="bottom",
-            )
+            if (
+                not df.empty
+                and "mean_core_interparticle_distance[au]" in df.columns
+                and "eclose_nb" in df.columns
+            ):
+                d_av = float(df["mean_core_interparticle_distance[au]"].iloc[0])
+                eclose_nb = float(df["eclose_nb"].iloc[0])
+                if np.isfinite(d_av) and np.isfinite(eclose_nb):
+                    ebind_threshold_nb = TEMPORARY_EBIND_FACTOR * eclose_nb
+                    ax.plot(
+                        [d_av, xmax], [1.0, 1.0], linestyle="--", color="darkred", linewidth=1.5
+                    )
+                    ax.plot(
+                        [d_av, d_av], [ymin, 1.0], linestyle="--", color="darkred", linewidth=1.5
+                    )
+                    x_label = min(max(d_av, xmin), xmax)
+                    y_label = min(max(1.0, ymin), ymax)
+                    ax.text(
+                        np.sqrt(x_label * xmax) if x_label > 0 else x_label,
+                        y_label,
+                        f"$E_{{bind}}=10^{{-3}}E_{{close}}={_sci_notation_2dp(ebind_threshold_nb)}$",
+                        color="darkred",
+                        fontsize=8,
+                        ha="center",
+                        va="bottom",
+                        rotation=0,
+                    )
+                    ax.text(
+                        x_label,
+                        np.sqrt(y_label * ymin) if ymin > 0 else ymin,
+                        f"$a=d_{{av}}={_sci_notation_2dp(d_av)}\\,\\mathrm{{au}}$",
+                        color="darkred",
+                        fontsize=8,
+                        ha="right",
+                        va="center",
+                        rotation=90,
+                    )
 
             if "binary_class" not in df.columns:
                 return
@@ -328,14 +382,19 @@ class BinaryStarVisualizer(BaseHDF5Visualizer):
                 cnt = int(counts.get(cls, 0))
                 frac = cnt / n if n > 0 else 0.0
                 lines.append(f"{cnt} {cls} ({frac:.1%})")
+            # Bottom-left is already occupied by the Stellar Types count table on the
+            # compact-object-only variant (_create_base_jpg_plot_compact_object_only's
+            # ax.table(loc="lower left")); fall back to bottom-right there instead.
+            x, ha = (0.98, "right") if ax.tables else (0.02, "left")
             ax.text(
-                xmax,
-                0.9,
+                x,
+                0.02,
                 "\n".join(lines),
                 color="darkred",
                 fontsize=9,
-                ha="right",
-                va="top",
+                ha=ha,
+                va="bottom",
+                transform=ax.transAxes,
             )
 
     @log_time(logger)

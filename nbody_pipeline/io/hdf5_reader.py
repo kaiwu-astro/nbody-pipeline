@@ -271,7 +271,7 @@ class HDF5FileProcessor:
                 'total_mass[solar]', 'Distance_to_cluster_center[pc]', 'mass_ratio',
                 'primary_stellar_type', 'secondary_stellar_type', 'Stellar Type',
                 'peri[au]', 'sum_of_radius[solar]', 'sum_of_radius[au]',
-                'Ebind_abs_NBODY', 'mean_core_interparticle_distance[au]',
+                'Ebind_abs_NBODY', 'eclose_nb', 'mean_core_interparticle_distance[au]',
                 'Ebind/kT', 'binary_class', 'is_hard_binary', 'tau_gw[Myr]',
                 'peri_over_radius'],
                 dtype='object')
@@ -441,6 +441,8 @@ class HDF5FileProcessor:
         rc_nb = _map_scalar_to_rows(binary_df_all["TTOT"], scalar_df_all, "RC")
         rbar_pc = _map_scalar_to_rows(binary_df_all["TTOT"], scalar_df_all, "RBAR")
 
+        # 暴露每快照真实 ECLOSE 值，供绘图端标注 temporary 判据的具体数值用。
+        binary_df_all["eclose_nb"] = eclose_nb.to_numpy(dtype=float)
         binary_df_all["mean_core_interparticle_distance[au]"] = mean_core_interparticle_distance_au(
             nc.to_numpy(dtype=float),
             rc_nb.to_numpy(dtype=float),
@@ -845,6 +847,36 @@ class HDF5FileProcessor:
                 for fn in hdf5_files
                 if "bad" not in os.path.basename(os.path.dirname(fn)).lower()
             ]
+
+        # Different physical files can share the same filename-derived index -- e.g. a
+        # stale archived copy left alongside a later re-generated file with the same
+        # "snap.40_N.h5part" name in a different directory (confirmed for 20sb:
+        # snap.40_0.h5part exists both in .../archive/ (old, missing "Bin Label") and
+        # .../snap.40/ (re-generated later with newer code, has "Bin Label")). Without
+        # dedup, sorting by index alone leaves both in the list with a tied sort key, so
+        # which one downstream code picks for that TTOT depends on arbitrary glob()
+        # traversal order. Keep the larger file per index -- in practice the more
+        # complete one (more Step# groups / more fields).
+        best_by_index: Dict[float, str] = {}
+        for fn in hdf5_files:
+            idx = self.get_hdf5_file_time_from_filename(fn)
+            current = best_by_index.get(idx)
+            if current is None:
+                best_by_index[idx] = fn
+            elif os.path.getsize(fn) > os.path.getsize(current):
+                logger.warning(
+                    f"[get_all_hdf5_paths] filename-index {idx} has duplicate files; "
+                    f"keeping larger {fn!r} over {current!r}"
+                )
+                best_by_index[idx] = fn
+            elif fn != current:
+                logger.warning(
+                    f"[get_all_hdf5_paths] filename-index {idx} has duplicate files; "
+                    f"keeping larger {current!r} over {fn!r}"
+                )
+        hdf5_files = sorted(
+            best_by_index.values(), key=lambda fn: self.get_hdf5_file_time_from_filename(fn)
+        )
 
         times = np.array(
             [self.get_hdf5_file_time_from_filename(fn) for fn in hdf5_files], dtype=float

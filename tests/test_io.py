@@ -418,6 +418,7 @@ class TestHDF5FileProcessor:
         )
         assert "mean_core_interparticle_distance[au]" in binaries.columns
         assert (binaries["mean_core_interparticle_distance[au]"] > 0).all()
+        assert (binaries["eclose_nb"] == 1.0).all()
 
     def test_read_file_missing_scalar_columns_falls_back_to_nan(self):
         """ECLOSE/NC/RC missing from scalars (old archived files/minimal mocks)
@@ -472,6 +473,7 @@ class TestHDF5FileProcessor:
         assert (binaries_out["binary_class"] != "hard").all()
         assert binaries_out["Ebind/kT"].isna().all()
         assert binaries_out["mean_core_interparticle_distance[au]"].isna().all()
+        assert binaries_out["eclose_nb"].isna().all()
 
     def test_binaries_cache_is_current_true_when_binary_class_present(self, temp_dir):
         processor = HDF5FileProcessor(Mock())
@@ -570,6 +572,40 @@ class TestHDF5FileProcessor:
 
         mock_read_file.assert_called_once()
         assert "Bin A[au]" in result["binaries"].columns
+
+    def test_get_all_hdf5_paths_dedups_same_index_keeps_larger_file(self, temp_dir, monkeypatch):
+        """Two different physical files can share the same filename-derived index
+        (e.g. a stale archived copy re-generated later under a different directory
+        with the same "snap.40_N.h5part" name, confirmed for 20sb's snap.40_0.h5part).
+        Without dedup both stay in the list with a tied sort key, so which one
+        downstream code picks depends on arbitrary glob() order. The larger file
+        should always win."""
+        small_dir = temp_dir / "archive"
+        large_dir = temp_dir / "snap.40"
+        small_dir.mkdir()
+        large_dir.mkdir()
+        small_file = small_dir / "snap.40_0.h5part"
+        large_file = large_dir / "snap.40_0.h5part"
+        small_file.write_bytes(b"0" * 10)
+        large_file.write_bytes(b"0" * 100)
+        other_file = temp_dir / "snap.40_1.h5part"
+        other_file.write_bytes(b"0" * 50)
+
+        monkeypatch.setattr("nbody_pipeline.io.hdf5_reader.os.path.getmtime", lambda p: 0.0)
+        monkeypatch.setattr("nbody_pipeline.io.hdf5_reader.time.time", lambda: 1e12)
+
+        config_mock = Mock()
+        config_mock.pathof = {"test_simu": str(temp_dir)}
+        processor = HDF5FileProcessor(config_mock)
+
+        paths = processor.get_all_hdf5_paths(
+            "test_simu", wait_age_hour=0, sample_every_nb_time=None, exclude_bad_dirname=False
+        )
+
+        assert str(large_file) in paths
+        assert str(small_file) not in paths
+        assert str(other_file) in paths
+        assert len(paths) == 2
 
 
 class TestLagrFileProcessor:
