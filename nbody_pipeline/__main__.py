@@ -225,6 +225,10 @@ class SimulationPlotter:
                 self.hdf5_visualizer.binary.create_ebind_semi_plot_jpg_compact_object_only(
                     binary_df_at_t, simu_name
                 )
+                # 硬/软/暂时分类散点图
+                self.hdf5_visualizer.binary.create_ebind_semi_plot_class_scatter(
+                    binary_df_at_t, simu_name
+                )
                 # GW时间-半长轴图
                 self.hdf5_visualizer.binary.create_taugw_semi_plot_jpg_compact_object_only(
                     binary_df_at_t, simu_name

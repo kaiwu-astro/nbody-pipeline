@@ -145,6 +145,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (constant-based) behaviour for continuity with step1; a proper fix using the real
   time-varying threshold is tracked as a separate future project.
 
+### Changed
+- **Breaking semantics:** `hdf5_reader.py`'s `Ebind/kT` binary-table column now divides
+  by `TEMPORARY_EBIND_FACTOR * ECLOSE` (the true per-snapshot `ECLOSE`, broadcast per-row
+  via `TTOT.map`) instead of the fixed `config.ECLOSE_INPUT`, fixing the normalization
+  limitation documented above. `is_hard_binary` keeps its column name (many external
+  consumers) but is redefined as `binary_class == "hard"` rather than `Ebind/kT >= 1`.
+  `default_config.yaml`'s `limits['Ebind/kT']` widened to `[1.0e-4, 1.0e9]` to
+  accommodate the ~1e3-3e5x larger values under the new denominator (20sb has
+  `ECLOSE` in ~0.003-1.0); will be tightened in a follow-up commit once real min/max
+  values are on record. `physics.ECLOSE_INPUT` config key is kept (still read by older
+  step2 scripts) but is annotated as legacy/unused by `hdf5_reader.py`.
+- The L1 feather cache (`{hdf5_path}.{table}.df.feather`) has no version marker, so
+  `read_file`/`read_tables` now lazily detect and self-heal stale binaries caches
+  written before this change (missing `binary_class` column): `read_file` re-reads the
+  source HDF5 and rewrites the cache; `read_tables`'s column-projected reads raise and
+  fall back to `read_file(write_cache=False)`, since a projection that never requests
+  `binary_class` would otherwise never notice the cache was stale.
+
+### Added
+- Hard/soft/temporary binary reclassification (2026-07 meeting,
+  `examples/soft-hard-temp/meeting.md`): `nbody_pipeline.analysis.physics` gains
+  `mean_core_interparticle_distance_au` (NC/RC-geometry core spacing estimate),
+  `classify_binaries` (hard = `Bin Label`==1; temporary = wider than core spacing *and*
+  weakly bound; else soft), `add_binary_energetics_and_class` (particle-lake read-time
+  join/classify helper -- lake tables themselves stay schema-frozen), and
+  `drop_temporary_binaries`. `hdf5_reader.py`'s binaries table gains
+  `mean_core_interparticle_distance[au]` and `binary_class` (`pd.Categorical`,
+  hard/soft/temporary) columns.
+- `BinaryStarVisualizer.create_ebind_semi_plot_class_scatter` (new
+  `BaseHDF5Visualizer._create_jointplot_class_scatter` engine, parallel to
+  `_create_jointplot_density`): Ebind/kT-vs-a scatter of all binaries in a snapshot,
+  colored by `binary_class` (color-blind-safe palette), with stacked marginal
+  histograms. `_decorator_ebin_semi` now reports three-way hard/soft/temporary counts
+  (was hard/soft) and labels the unchanged `y=1` threshold line as
+  `Ebind = 1e-3*Eclose`. Registered in `__main__.py`'s binary plotting block and
+  `visualization/purge.py`'s `BINARY_TARGETS`.
+- `examples/soft-hard-temp/run_trial.py`: trial script comparing binary-table
+  populations before/after `drop_temporary_binaries` cleanup across 9 representative
+  20sb snapshots, focused on the compact-object a-vs-primary-mass plot; writes
+  `class_counts.csv` with per-snapshot hard/soft/temporary counts and Ebind/kT ranges.
+
 ## [1.0.0] - 2026-07-10
 
 Initial tagged release, consolidating roughly a year of iterative development into a

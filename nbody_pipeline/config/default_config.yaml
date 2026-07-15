@@ -99,7 +99,7 @@ particle_lake:
 
 # Physical constants and thresholds
 physics:
-  ECLOSE_INPUT: 1.0  # Binding energy per unit mass for hard binary (positive)
+  ECLOSE_INPUT: 1.0  # legacy，hdf5_reader 已不再使用（改用每快照真实 ECLOSE，见 physics.TEMPORARY_EBIND_FACTOR）；键保留，step2 老脚本仍引用
   universe_age_myr: 13800.0
   IMBH_mass_range_msun: [100, 100000]
   extreme_mass_ratio_upper: 0.1
@@ -147,7 +147,7 @@ limits:
   'position_pc_lim_moderate': [-7.0, 7.0]
   'position_pc_lim': [-15.0, 15.0]
   'position_pc_lim_MAX': [-2000.0, 2000.0]
-  'Ebind/kT': [2.0e-7, 500.0]
+  'Ebind/kT': [1.0e-4, 1.0e+9]  # 2026-07 分母改为 1e-3*ECLOSE（20sb 中 ECLOSE≈0.003-1.0），先放宽，试水后按 summary min/max 收紧
   'tau_gw[Myr]': [9.0, 14000.0]
   'velocity_kmps_lim': [-200.0, 200.0]
   'sum_of_radius[au]': [1.0e-7, 1.0]

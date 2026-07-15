@@ -18,6 +18,30 @@ from nbody_pipeline.utils import log_time
 
 logger = logging.getLogger(__name__)
 _CONFIG_DEFAULT = object()
+# Sentinel for binaries missing "Bin Label" (very old archived files predate that
+# dataset) -- matches nbody_pipeline.analysis.particle_lake._BIN_LABEL_UNKNOWN.
+_BIN_LABEL_UNKNOWN = -9
+
+
+def _map_scalar_to_rows(
+    ttot_series: pd.Series, scalar_df_all: pd.DataFrame, column: str
+) -> pd.Series:
+    """Broadcast a per-snapshot scalar column onto per-row TTOT.
+
+    Uses the same ``TTOT.map(scalar_df_all[col])`` idiom as the existing
+    RDENS broadcast (see ``read_file`` ~:309-314). If ``column`` is missing
+    (old archived files, or minimal mocks in tests), returns an all-NaN
+    series and logs a warning instead of raising.
+    """
+    if column not in scalar_df_all.columns:
+        logger.warning(
+            "[hdf5_reader] scalars table missing column %r; filling with NaN "
+            "(binary_class/mean_core_interparticle_distance[au]/Ebind/kT columns "
+            "will be affected).",
+            column,
+        )
+        return pd.Series(np.nan, index=ttot_series.index)
+    return ttot_series.map(scalar_df_all[column])
 
 
 class HDF5FileProcessor:
@@ -36,6 +60,27 @@ class HDF5FileProcessor:
 
     def _cache_is_complete(self, feather_path_of: Dict[str, str]) -> bool:
         return all(Path(p).is_file() for p in feather_path_of.values())
+
+    def _binaries_cache_is_current(self, feather_path: str) -> bool:
+        """Whether a binaries feather cache already has the ``binary_class`` column.
+
+        The L1 feather cache has no version marker, so this is a lazy schema
+        check: read just ``binary_class`` (cheap even for a large table) --
+        success means current. On failure (missing/old-schema cache), fall
+        back to a full read: an empty table (old zero-row placeholder cache,
+        see ``_write_df_dict_to_cache``) has nothing stale to worry about and
+        counts as current; a non-empty table without ``binary_class`` is stale.
+        """
+        try:
+            pd.read_feather(feather_path, columns=["binary_class"])
+            return True
+        except Exception:
+            pass
+        try:
+            full = pd.read_feather(feather_path)
+        except Exception:
+            return False
+        return full.empty
 
     def _read_df_dict_from_cache(self, feather_path_of: Dict[str, str]) -> Dict[str, pd.DataFrame]:
         df_dict = {
@@ -72,6 +117,12 @@ class HDF5FileProcessor:
                     feather_path = feather_path_of[table]
                     if not Path(feather_path).is_file():
                         raise FileNotFoundError(feather_path)
+                    if table == "binaries" and not self._binaries_cache_is_current(feather_path):
+                        # 列投影读取可能只取旧 Ebind/kT 而永远碰不到 binary_class，
+                        # 所以无论 columns_by_table 是否请求它都要独立探测。
+                        raise ValueError(
+                            f"[cache] stale binaries feather (missing binary_class): {feather_path}"
+                        )
                     columns = columns_by_table.get(table)
                     if columns is None:
                         df = pd.read_feather(feather_path)
@@ -220,9 +271,19 @@ class HDF5FileProcessor:
                 'total_mass[solar]', 'Distance_to_cluster_center[pc]', 'mass_ratio',
                 'primary_stellar_type', 'secondary_stellar_type', 'Stellar Type',
                 'peri[au]', 'sum_of_radius[solar]', 'sum_of_radius[au]',
-                'Ebind_abs_NBODY', 'Ebind/kT', 'is_hard_binary', 'tau_gw[Myr]',
+                'Ebind_abs_NBODY', 'mean_core_interparticle_distance[au]',
+                'Ebind/kT', 'binary_class', 'is_hard_binary', 'tau_gw[Myr]',
                 'peri_over_radius'],
                 dtype='object')
+
+            Note (2026-07 soft/hard/temporary reclassification, see
+            ``examples/soft-hard-temp/meeting.md``): ``Ebind/kT`` now divides by
+            ``TEMPORARY_EBIND_FACTOR * ECLOSE`` (the true per-snapshot ``ECLOSE``,
+            not the old fixed ``config.ECLOSE_INPUT``); ``binary_class`` is a
+            ``pd.Categorical`` in {"hard", "soft", "temporary"} (see
+            ``nbody_pipeline.analysis.physics.classify_binaries``); and
+            ``is_hard_binary`` is redefined as ``binary_class == "hard"`` (same
+            column name, new semantics -- see CHANGELOG).
         """
         from nbody_pipeline.io.text_parsers import (
             get_valueStr_of_namelist_key,
@@ -234,7 +295,11 @@ class HDF5FileProcessor:
         logger.debug(f"\nProcessing {hdf5_path=}...")
 
         feather_path_of = self._get_feather_path_of(hdf5_path)
-        if use_cache and self._cache_is_complete(feather_path_of):
+        if (
+            use_cache
+            and self._cache_is_complete(feather_path_of)
+            and self._binaries_cache_is_current(feather_path_of["binaries"])
+        ):
             try:
                 df_dict = self._read_df_dict_from_cache(feather_path_of)
                 logger.info(f"[hdf5-dataframe-cache] Loaded feather cache for {hdf5_path}")
@@ -360,8 +425,51 @@ class HDF5FileProcessor:
                 + binary_df_all["Bin M2*"] / scale_dict["m"]
             )
         )
-        binary_df_all["Ebind/kT"] = binary_df_all["Ebind_abs_NBODY"] / self.config.ECLOSE_INPUT
-        binary_df_all["is_hard_binary"] = binary_df_all["Ebind/kT"] >= 1
+        # Ebind/kT 分母改为每快照真实 ECLOSE（乘 TEMPORARY_EBIND_FACTOR），并按
+        # bin_label/a/Ebind/ECLOSE/核区平均星间距做 hard/soft/temporary 三分类
+        # (2026-07 会议 examples/soft-hard-temp/meeting.md 落地)。physics 延迟导入，
+        # 避免 io<->analysis 循环导入（同上面 text_parsers 的做法，见 :227-232）。
+        from nbody_pipeline.analysis.physics import (
+            TEMPORARY_EBIND_FACTOR,
+            BINARY_CLASS_ORDER,
+            classify_binaries,
+            mean_core_interparticle_distance_au,
+        )
+
+        eclose_nb = _map_scalar_to_rows(binary_df_all["TTOT"], scalar_df_all, "ECLOSE")
+        nc = _map_scalar_to_rows(binary_df_all["TTOT"], scalar_df_all, "NC")
+        rc_nb = _map_scalar_to_rows(binary_df_all["TTOT"], scalar_df_all, "RC")
+        rbar_pc = _map_scalar_to_rows(binary_df_all["TTOT"], scalar_df_all, "RBAR")
+
+        binary_df_all["mean_core_interparticle_distance[au]"] = mean_core_interparticle_distance_au(
+            nc.to_numpy(dtype=float),
+            rc_nb.to_numpy(dtype=float),
+            rbar_pc=rbar_pc.to_numpy(dtype=float),
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            binary_df_all["Ebind/kT"] = binary_df_all["Ebind_abs_NBODY"] / (
+                TEMPORARY_EBIND_FACTOR * eclose_nb
+            )
+        binary_df_all["Ebind/kT"] = binary_df_all["Ebind/kT"].replace([np.inf, -np.inf], np.nan)
+
+        if "Bin Label" in binary_df_all.columns:
+            bin_label = binary_df_all["Bin Label"]
+        else:
+            bin_label = pd.Series(_BIN_LABEL_UNKNOWN, index=binary_df_all.index)
+        binary_df_all["binary_class"] = pd.Categorical(
+            classify_binaries(
+                bin_label.to_numpy(),
+                binary_df_all["Bin A[au]"].to_numpy(dtype=float),
+                binary_df_all["Ebind_abs_NBODY"].to_numpy(dtype=float),
+                eclose_nb=eclose_nb.to_numpy(dtype=float),
+                mean_core_distance_au=binary_df_all[
+                    "mean_core_interparticle_distance[au]"
+                ].to_numpy(dtype=float),
+            ),
+            categories=BINARY_CLASS_ORDER,
+        )
+        # 列名保留（外部消费者较多，改名代价大），语义重定义为 binary_class == "hard"。
+        binary_df_all["is_hard_binary"] = binary_df_all["binary_class"] == "hard"
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)

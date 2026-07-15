@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from nbody_pipeline.analysis.physics import BINARY_CLASS_ORDER
 from nbody_pipeline.visualization import (
     BaseVisualizer,
     BaseHDF5Visualizer,
@@ -57,6 +58,7 @@ def mock_config():
         "Teff*": (1000, 100000),
         "L*": (0.001, 10000),
         "Bin A[au]": (0.01, 1000),
+        "Ebind/kT": (1.0e-4, 1.0e9),
     }
     config.plot_dir = "/tmp/plots"
     config.figname_prefix = {"test_sim": "test_"}
@@ -104,7 +106,7 @@ def sample_dataframe():
 @pytest.fixture
 def sample_binary_dataframe():
     """Create a sample binary DataFrame for testing"""
-    return pd.DataFrame(
+    df = pd.DataFrame(
         {
             "TTOT": [1.0] * 50,
             "Time[Myr]": [10.0] * 50,
@@ -124,10 +126,14 @@ def sample_binary_dataframe():
             "Bin KW1": np.random.choice([10, 13, 14], 50),
             "Bin KW2": np.random.choice([10, 13, 14], 50),
             "Stellar Type": ["Type10-Type13"] * 50,
-            "is_hard_binary": np.random.choice([True, False], 50),
+            "binary_class": pd.Categorical(
+                np.random.choice(BINARY_CLASS_ORDER, 50), categories=BINARY_CLASS_ORDER
+            ),
             "tau_gw[Myr]": np.random.uniform(1, 1000, 50),
         }
     )
+    df["is_hard_binary"] = df["binary_class"] == "hard"
+    return df
 
 
 @pytest.fixture
@@ -642,6 +648,69 @@ class TestBinaryStarVisualizer:
 
         assert observed["xlim"] == (-50, 50)
         assert observed["ylim"] == (-75, 75)
+
+    def test_create_ebind_semi_plot_class_scatter_smoke(
+        self, mock_config, sample_binary_dataframe, tmp_path
+    ):
+        """Normal frame with all three classes present renders without error."""
+        mock_config.plot_dir = str(tmp_path)
+        (tmp_path / "jpg").mkdir()
+        vis = BinaryStarVisualizer(mock_config)
+
+        vis.create_ebind_semi_plot_class_scatter(sample_binary_dataframe, "test_sim")
+
+        jpgs = list((tmp_path / "jpg").glob("*ebind_vs_a_loglog_class_scatter.jpg"))
+        assert len(jpgs) == 1
+        plt.close("all")
+
+    def test_create_ebind_semi_plot_class_scatter_single_category_smoke(
+        self, mock_config, sample_binary_dataframe, tmp_path
+    ):
+        """A frame with only one binary_class present should still render."""
+        mock_config.plot_dir = str(tmp_path)
+        (tmp_path / "jpg").mkdir()
+        vis = BinaryStarVisualizer(mock_config)
+
+        df = sample_binary_dataframe.copy()
+        df["binary_class"] = pd.Categorical(["hard"] * len(df), categories=BINARY_CLASS_ORDER)
+        df["is_hard_binary"] = True
+
+        vis.create_ebind_semi_plot_class_scatter(df, "test_sim")
+
+        jpgs = list((tmp_path / "jpg").glob("*ebind_vs_a_loglog_class_scatter.jpg"))
+        assert len(jpgs) == 1
+        plt.close("all")
+
+    def test_decorator_ebin_semi_missing_binary_class_does_not_raise(self, mock_config):
+        """Older callers/mocks without binary_class degrade to just the threshold line."""
+        vis = BinaryStarVisualizer(mock_config)
+        _, ax = plt.subplots()
+        ax.set_xlim(0, 10)
+        df = pd.DataFrame({"Ebind/kT": [1.0, 2.0]})
+
+        vis._decorator_ebin_semi(ax, df)
+
+        plt.close(ax.figure)
+
+    def test_decorator_ebin_semi_reports_three_way_counts(self, mock_config):
+        vis = BinaryStarVisualizer(mock_config)
+        _, ax = plt.subplots()
+        ax.set_xlim(0, 10)
+        df = pd.DataFrame(
+            {
+                "binary_class": pd.Categorical(
+                    ["hard", "hard", "soft", "temporary"], categories=BINARY_CLASS_ORDER
+                )
+            }
+        )
+
+        vis._decorator_ebin_semi(ax, df)
+
+        texts = [t.get_text() for t in ax.texts]
+        assert any("2 hard" in t for t in texts)
+        assert any("1 soft" in t for t in texts)
+        assert any("1 temporary" in t for t in texts)
+        plt.close(ax.figure)
 
 
 class TestLagrVisualizer:

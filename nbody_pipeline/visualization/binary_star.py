@@ -10,11 +10,19 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from nbody_pipeline.analysis.physics import BINARY_CLASS_ORDER
 from nbody_pipeline.utils import log_time
 from nbody_pipeline.visualization.base import BaseHDF5Visualizer, add_grid
 from nbody_pipeline.visualization.purge import PlotPurger, PurgeResult
 
 logger = logging.getLogger(__name__)
+
+# 色盲安全色板（hard/soft/temporary），2026-07 会议定案。
+BINARY_CLASS_PALETTE = {
+    "hard": "#d55e00",
+    "soft": "#0072b2",
+    "temporary": "#999999",
+}
 
 
 class BinaryStarVisualizer(BaseHDF5Visualizer):
@@ -288,29 +296,44 @@ class BinaryStarVisualizer(BaseHDF5Visualizer):
         )
 
     def _decorator_ebin_semi(self, ax: plt.Axes, df: pd.DataFrame) -> None:
-        """Decorator to add hard/soft binary line and statistics"""
-        ax.axhline(y=1, linestyle="--", color="darkred", linewidth=1.5)
-        hard_num = np.sum(df["is_hard_binary"])
-        soft_num = len(df) - hard_num
-        hard_frac, soft_frac = (
-            (hard_num / len(df), soft_num / len(df)) if len(df) > 0 else (0.0, 0.0)
-        )
+        """Decorator to add hard/soft threshold line and hard/soft/temporary statistics.
 
+        Under the new ``Ebind/kT`` normalization (denominator =
+        ``TEMPORARY_EBIND_FACTOR * ECLOSE``), ``y=1`` is exactly the
+        temporary-binary energy threshold ``Ebind = 1e-3*Eclose`` -- the
+        existing line at ``y=1`` stays, only its label changes. Counts come
+        from the three-way ``binary_class`` column; if that column is
+        missing (older callers / mocks), degrades to drawing just the line.
+        """
+        ax.axhline(y=1, linestyle="--", color="darkred", linewidth=1.5)
         xmax = ax.get_xlim()[1]
         with mpl.rc_context(**self.config.fixed_width_font_context):
             ax.text(
                 xmax,
                 1.0,
-                f"{hard_num}\n{hard_frac:.1%} hard",
+                "$E_{bind}=10^{-3}E_{close}$",
                 color="darkred",
+                fontsize=9,
                 ha="right",
                 va="bottom",
             )
+
+            if "binary_class" not in df.columns:
+                return
+
+            n = len(df)
+            counts = df["binary_class"].value_counts()
+            lines = []
+            for cls in BINARY_CLASS_ORDER:
+                cnt = int(counts.get(cls, 0))
+                frac = cnt / n if n > 0 else 0.0
+                lines.append(f"{cnt} {cls} ({frac:.1%})")
             ax.text(
                 xmax,
                 0.9,
-                f"{soft_frac:.1%} soft\n{soft_num}",
+                "\n".join(lines),
                 color="darkred",
+                fontsize=9,
                 ha="right",
                 va="top",
             )
@@ -341,6 +364,28 @@ class BinaryStarVisualizer(BaseHDF5Visualizer):
             log_scale=(True, True),
             filename_var_part="ebind_vs_a_loglog_compact_objects_only",
             custom_ax_decorator=self._decorator_ebin_semi,
+        )
+
+    @log_time(logger)
+    def create_ebind_semi_plot_class_scatter(
+        self, binary_df_at_t: pd.DataFrame, simu_name: str
+    ) -> None:
+        """Create hard/soft/temporary classification scatter of Ebind/kT vs a.
+
+        All binaries in the snapshot (no compact-only filter) -- 会议
+        "所有伴星（Final）" 按该快照全部 binaries 理解。
+        """
+        self._create_jointplot_class_scatter(
+            df_at_t=binary_df_at_t,
+            simu_name=simu_name,
+            x_col="Bin A[au]",
+            y_col="Ebind/kT",
+            hue_col="binary_class",
+            hue_order=BINARY_CLASS_ORDER,
+            palette=BINARY_CLASS_PALETTE,
+            log_scale=(True, True),
+            filename_var_part="ebind_vs_a_loglog_class_scatter",
+            custom_ax_joint_decorator=self._decorator_ebin_semi,
         )
 
     @log_time(logger)
