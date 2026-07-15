@@ -312,6 +312,50 @@ class TestHDF5FileProcessor:
 
         assert mask.tolist() == [False, True, True]
 
+    def _make_scalars_mock(self):
+        return pd.DataFrame(
+            {
+                "TTOT": [1.0],
+                "TTOT/TCR0": [1.0],
+                "RBAR": [1.0],
+                "ZMBAR": [1.0],
+                "TSCALE": [1.0],
+                "VSTAR": [1.0],
+                "RDENS(1)": [0.0],
+                "RDENS(2)": [0.0],
+                "RDENS(3)": [0.0],
+                "ECLOSE": [1.0],
+                "NC": [1000],
+                "RC": [0.01],
+            }
+        ).set_index("TTOT", drop=False)
+
+    def _make_binaries_mock_three_classes(self):
+        # One row per class, hand-picked to be unambiguous under
+        # TEMPORARY_EBIND_FACTOR=1e-3 and the RC=0.01/NC=1000/RBAR=1.0 mean
+        # core spacing above (~332.5 au):
+        # hard: Bin Label==1 wins regardless of a/Ebind.
+        # soft: Bin Label==0 (wide), a=1.0 au < core spacing -> never temporary.
+        # temporary: Bin Label==-9 (unknown), a=1000 au > core spacing, and
+        # tiny masses push Ebind well below 1e-3*ECLOSE.
+        return pd.DataFrame(
+            {
+                "TTOT": [1.0, 1.0, 1.0],
+                "Bin cm X1": [0.0, 0.0, 0.0],
+                "Bin cm X2": [0.0, 0.0, 0.0],
+                "Bin cm X3": [0.0, 0.0, 0.0],
+                "Bin M1*": [10.0, 1.0, 1e-5],
+                "Bin M2*": [5.0, 1.0, 1e-5],
+                "Bin KW1": [0, 0, 0],
+                "Bin KW2": [0, 0, 0],
+                "Bin A[au]": [1.0, 1.0, 1000.0],
+                "Bin ECC": [0.1, 0.1, 0.1],
+                "Bin RS1*": [0.0, 0.0, 0.0],
+                "Bin RS2*": [0.0, 0.0, 0.0],
+                "Bin Label": [1, 0, -9],
+            }
+        )
+
     def test_read_file_can_read_cache_without_writing_missing_cache(self):
         """use_cache=True can check Feather cache without creating it."""
         config_mock = Mock()
@@ -319,23 +363,10 @@ class TestHDF5FileProcessor:
         config_mock.kw_to_stellar_type_verbose = {0: "0:MS"}
         config_mock.kw_to_stellar_type = {0: "MS"}
         config_mock.limits = {"L*": [1.0e-6, 1.0e6], "Teff*": [1000.0, 1.0e6]}
-        config_mock.ECLOSE_INPUT = 1.0
         config_mock.universe_age_myr = 13800.0
         processor = HDF5FileProcessor(config_mock)
         df_dict = {
-            "scalars": pd.DataFrame(
-                {
-                    "TTOT": [1.0],
-                    "TTOT/TCR0": [1.0],
-                    "RBAR": [1.0],
-                    "ZMBAR": [1.0],
-                    "TSCALE": [1.0],
-                    "VSTAR": [1.0],
-                    "RDENS(1)": [0.0],
-                    "RDENS(2)": [0.0],
-                    "RDENS(3)": [0.0],
-                }
-            ).set_index("TTOT", drop=False),
+            "scalars": self._make_scalars_mock(),
             "singles": pd.DataFrame(
                 {
                     "TTOT": [1.0],
@@ -351,22 +382,7 @@ class TestHDF5FileProcessor:
                     "Teff*": [5000.0],
                 }
             ),
-            "binaries": pd.DataFrame(
-                {
-                    "TTOT": pd.Series(dtype=float),
-                    "Bin cm X1": pd.Series(dtype=float),
-                    "Bin cm X2": pd.Series(dtype=float),
-                    "Bin cm X3": pd.Series(dtype=float),
-                    "Bin M1*": pd.Series(dtype=float),
-                    "Bin M2*": pd.Series(dtype=float),
-                    "Bin KW1": pd.Series(dtype=int),
-                    "Bin KW2": pd.Series(dtype=int),
-                    "Bin A[au]": pd.Series(dtype=float),
-                    "Bin ECC": pd.Series(dtype=float),
-                    "Bin RS1*": pd.Series(dtype=float),
-                    "Bin RS2*": pd.Series(dtype=float),
-                }
-            ),
+            "binaries": self._make_binaries_mock_three_classes(),
             "mergers": pd.DataFrame(),
         }
 
@@ -391,6 +407,169 @@ class TestHDF5FileProcessor:
 
         assert result["scalars"]["Time[Myr]"].tolist() == [1.0]
         mock_write.assert_not_called()
+
+        binaries = result["binaries"]
+        assert list(binaries["binary_class"]) == ["hard", "soft", "temporary"]
+        assert list(binaries["is_hard_binary"]) == [True, False, False]
+        # New denominator: Ebind_abs_NBODY / (1e-3 * ECLOSE), ECLOSE=1.0 here.
+        expected_ebind_over_kt = binaries["Ebind_abs_NBODY"] / 1.0e-3
+        pd.testing.assert_series_equal(
+            binaries["Ebind/kT"], expected_ebind_over_kt, check_names=False
+        )
+        assert "mean_core_interparticle_distance[au]" in binaries.columns
+        assert (binaries["mean_core_interparticle_distance[au]"] > 0).all()
+
+    def test_read_file_missing_scalar_columns_falls_back_to_nan(self):
+        """ECLOSE/NC/RC missing from scalars (old archived files/minimal mocks)
+        -> binary_class/Ebind/kT columns degrade to NaN/soft instead of raising."""
+        config_mock = Mock()
+        config_mock.input_file_path_of = {"test_simu": "/fake/input"}
+        config_mock.kw_to_stellar_type_verbose = {0: "0:MS"}
+        config_mock.kw_to_stellar_type = {0: "MS"}
+        config_mock.limits = {"L*": [1.0e-6, 1.0e6], "Teff*": [1000.0, 1.0e6]}
+        config_mock.universe_age_myr = 13800.0
+        processor = HDF5FileProcessor(config_mock)
+        scalars = self._make_scalars_mock().drop(columns=["ECLOSE", "NC", "RC"])
+        binaries = self._make_binaries_mock_three_classes().drop(columns=["Bin Label"])
+        df_dict = {
+            "scalars": scalars,
+            "singles": pd.DataFrame(
+                {
+                    "TTOT": [1.0],
+                    "X1": [0.0],
+                    "X2": [0.0],
+                    "X3": [0.0],
+                    "V1": [0.0],
+                    "V2": [0.0],
+                    "V3": [0.0],
+                    "M": [1.0],
+                    "KW": [0],
+                    "L*": [1.0],
+                    "Teff*": [5000.0],
+                }
+            ),
+            "binaries": binaries,
+            "mergers": pd.DataFrame(),
+        }
+
+        with (
+            patch.object(processor, "_cache_is_complete", return_value=False),
+            patch(
+                "nbody_pipeline.io.text_parsers.dataframes_from_hdf5_file",
+                return_value=df_dict,
+            ),
+            patch(
+                "nbody_pipeline.io.text_parsers.get_valueStr_of_namelist_key",
+                return_value="10",
+            ),
+        ):
+            result = processor.read_file(
+                "/fake/snap.40_1.h5part", "test_simu", use_cache=False, write_cache=False
+            )
+
+        binaries_out = result["binaries"]
+        # No "Bin Label" column -> sentinel -9 for every row -> never hard.
+        assert (binaries_out["binary_class"] != "hard").all()
+        assert binaries_out["Ebind/kT"].isna().all()
+        assert binaries_out["mean_core_interparticle_distance[au]"].isna().all()
+
+    def test_binaries_cache_is_current_true_when_binary_class_present(self, temp_dir):
+        processor = HDF5FileProcessor(Mock())
+        path = str(temp_dir / "current.binaries.df.feather")
+        pd.DataFrame({"TTOT": [1.0], "binary_class": ["hard"]}).to_feather(path)
+        assert processor._binaries_cache_is_current(path) is True
+
+    def test_binaries_cache_is_current_false_for_stale_nonempty(self, temp_dir):
+        processor = HDF5FileProcessor(Mock())
+        path = str(temp_dir / "stale.binaries.df.feather")
+        pd.DataFrame({"TTOT": [1.0], "Ebind/kT": [2.0]}).to_feather(path)
+        assert processor._binaries_cache_is_current(path) is False
+
+    def test_binaries_cache_is_current_true_for_empty_placeholder(self, temp_dir):
+        """An old zero-row placeholder cache has nothing stale, so counts as current."""
+        processor = HDF5FileProcessor(Mock())
+        path = str(temp_dir / "empty.binaries.df.feather")
+        pd.DataFrame().to_feather(path)
+        assert processor._binaries_cache_is_current(path) is True
+
+    def test_read_file_self_heals_stale_binaries_cache(self, temp_dir):
+        """use_cache=True re-reads HDF5 and rewrites the cache when the cached
+        binaries feather predates binary_class, instead of returning stale data."""
+        config_mock = Mock()
+        config_mock.input_file_path_of = {"test_simu": "/fake/input"}
+        config_mock.kw_to_stellar_type_verbose = {0: "0:MS"}
+        config_mock.kw_to_stellar_type = {0: "MS"}
+        config_mock.limits = {"L*": [1.0e-6, 1.0e6], "Teff*": [1000.0, 1.0e6]}
+        config_mock.universe_age_myr = 13800.0
+        processor = HDF5FileProcessor(config_mock)
+
+        hdf5_path = str(temp_dir / "snap.40_1.h5part")
+        feather_path_of = processor._get_feather_path_of(hdf5_path)
+        self._make_scalars_mock().reset_index(drop=True).to_feather(feather_path_of["scalars"])
+        pd.DataFrame({"TTOT": [1.0], "X1": [0.0]}).to_feather(feather_path_of["singles"])
+        # Stale: pre-reclassification schema, no binary_class column.
+        pd.DataFrame({"TTOT": [1.0], "Ebind/kT": [2.0]}).to_feather(feather_path_of["binaries"])
+        pd.DataFrame().to_feather(feather_path_of["mergers"])
+
+        df_dict = {
+            "scalars": self._make_scalars_mock(),
+            "singles": pd.DataFrame(
+                {
+                    "TTOT": [1.0],
+                    "X1": [0.0],
+                    "X2": [0.0],
+                    "X3": [0.0],
+                    "V1": [0.0],
+                    "V2": [0.0],
+                    "V3": [0.0],
+                    "M": [1.0],
+                    "KW": [0],
+                    "L*": [1.0],
+                    "Teff*": [5000.0],
+                }
+            ),
+            "binaries": self._make_binaries_mock_three_classes(),
+            "mergers": pd.DataFrame(),
+        }
+
+        with (
+            patch(
+                "nbody_pipeline.io.text_parsers.dataframes_from_hdf5_file",
+                return_value=df_dict,
+            ),
+            patch(
+                "nbody_pipeline.io.text_parsers.get_valueStr_of_namelist_key",
+                return_value="10",
+            ),
+        ):
+            result = processor.read_file(hdf5_path, "test_simu", use_cache=True, write_cache=True)
+
+        assert "binary_class" in result["binaries"].columns
+        # Self-healed: the cache on disk now has the new schema too.
+        assert processor._binaries_cache_is_current(feather_path_of["binaries"]) is True
+
+    def test_read_tables_falls_back_when_binaries_cache_stale(self, temp_dir):
+        """Column-projected read_tables reads never request binary_class directly,
+        so staleness must be probed independent of columns_by_table."""
+        processor = HDF5FileProcessor(Mock())
+        hdf5_path = str(temp_dir / "snap.40_2.h5part")
+        feather_path_of = processor._get_feather_path_of(hdf5_path)
+        pd.DataFrame({"TTOT": [1.0], "Ebind/kT": [2.0]}).to_feather(feather_path_of["binaries"])
+
+        fresh_binaries = pd.DataFrame({"TTOT": [1.0], "Bin A[au]": [1.0], "binary_class": ["hard"]})
+        with patch.object(
+            processor, "read_file", return_value={"binaries": fresh_binaries}
+        ) as mock_read_file:
+            result = processor.read_tables(
+                hdf5_path,
+                "test_simu",
+                tables=("binaries",),
+                columns_by_table={"binaries": ["Bin A[au]"]},
+                use_cache=True,
+            )
+
+        mock_read_file.assert_called_once()
+        assert "Bin A[au]" in result["binaries"].columns
 
 
 class TestLagrFileProcessor:

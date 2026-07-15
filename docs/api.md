@@ -168,12 +168,48 @@ annotated_df = annotate_binary_states(binary_df)  # adds mt_ongoing/mt_past/is_r
 
 `binding_energy_nb(m1_msun, m2_msun, a_au, *, zmbar_msun, rbar_pc)` reproduces `hdf5_reader.py`'s
 `Ebind_abs_NBODY` formula exactly (reduced mass over twice the semi-major axis, both in N-body units) for
-numerical continuity with existing step1 CSVs. `ebind_over_kt(ebind_nb, eclose_nb)` is a plain division;
-**pass `config.ECLOSE_INPUT` (the fixed constant, default 1.0), not the real per-snapshot
-`snapshot_scalars.eclose_nb`**, to stay numerically consistent with step1's `Ebind/kT`/`is_hard_binary`
-columns. `eclose_nb` genuinely varies over a run (e.g. 0.003-1.0 within 20sb) because `adjust.F` re-tunes
-it, so this is a known normalization limitation of the existing pipeline, not a step2 design choice --
-fixing it properly (using the real time-varying threshold) is tracked as a separate future project.
+numerical continuity with existing step1 CSVs. `ebind_over_kt(ebind_nb, eclose_nb)` is a plain division --
+the caller picks the denominator. As of the 2026-07 soft/hard/temporary reclassification (see
+`examples/soft-hard-temp/meeting.md`), `hdf5_reader.py`'s `Ebind/kT` column divides by
+`TEMPORARY_EBIND_FACTOR * eclose_nb` (the true per-snapshot `snapshot_scalars.eclose_nb`, which genuinely
+varies over a run -- e.g. 0.003-1.0 within 20sb -- because `adjust.F` re-tunes it), not the old fixed
+`config.ECLOSE_INPUT`. Older step2 scripts (e.g.
+`examples/gaia_bh_formation/step2/11_extract_lake_timelines.py`) still pass `config.ECLOSE_INPUT` for
+continuity with archived results; new callers should prefer `TEMPORARY_EBIND_FACTOR * eclose_nb` (or just
+call `add_binary_energetics_and_class` below, which does this for you).
+
+### `nbody_pipeline.analysis.physics` binary classification helpers
+
+Hard/soft/temporary binary classification (2026-07 reclassification, `examples/soft-hard-temp/meeting.md`).
+"Temporary" binaries are binary-table false positives -- two stars caught transiently close together in the
+dense core, expected to disperse almost immediately -- identified by being both wider than the local
+core spacing and weakly bound.
+
+- `mean_core_interparticle_distance_au(nc, rc_nb, *, rbar_pc)` -- mean inter-particle spacing near the
+  cluster core from `NC`/`RC` geometry (`n_c = 3*NC/(4*pi*RC^3)`, `d = n_c^(-1/3)`, converted to AU via
+  `RBAR`). Returns NaN for `NC<=0`/`RC<=0`/NaN (e.g. `t=0` before the core is defined).
+- `classify_binaries(bin_label, a_au, ebind_nb, *, eclose_nb, mean_core_distance_au,
+  temporary_ebind_factor=TEMPORARY_EBIND_FACTOR)` -- returns an array of `"hard"`/`"temporary"`/`"soft"`
+  (priority in that order): hard is `bin_label == 1` unconditionally; temporary additionally requires
+  `a_au > mean_core_distance_au` *and* `ebind_nb < temporary_ebind_factor * eclose_nb`; everything else is
+  soft. Never raises -- NaN/invalid inputs (unknown `bin_label`, non-positive/NaN `eclose_nb`, NaN
+  distance/energy) fall through to soft via plain NaN-comparison semantics.
+- `add_binary_energetics_and_class(binaries, scalars, *, temporary_ebind_factor=TEMPORARY_EBIND_FACTOR)` --
+  read-time helper for particle-lake consumers: left-joins `snapshot_scalars`
+  (`zmbar_msun`/`rbar_pc`/`eclose_nb`/`rc_nb`/`nc`) onto a `snapshot_binaries` frame on
+  `["simulation_id", "ttot"]` and adds `ebind_nb`, `mean_core_distance_au`, `ebind_over_kt`, and
+  `binary_class`. The lake tables themselves stay schema-frozen (raw columns only); this runs after
+  reading. Returns a copy.
+- `drop_temporary_binaries(binary_df, *, class_col="binary_class")` -- removes `temporary`-classified rows;
+  rows with a missing/NaN class are kept conservatively. Returns a copy.
+
+```python
+from nbody_pipeline.analysis import add_binary_energetics_and_class, drop_temporary_binaries
+
+binaries = add_binary_energetics_and_class(snapshot_binaries_df, snapshot_scalars_df)
+binaries["binary_class"].value_counts()      # hard / soft / temporary counts
+clean_binaries = drop_temporary_binaries(binaries)  # false positives removed
+```
 
 ## Schema Registry
 

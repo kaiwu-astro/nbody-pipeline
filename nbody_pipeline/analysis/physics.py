@@ -2,6 +2,7 @@
 
 from typing import Tuple, Union
 import numpy as np
+import pandas as pd
 import astropy.constants as constants
 import astropy.units as u
 
@@ -14,11 +15,30 @@ __all__ = [
     "compute_individual_orbit_params",
     "binding_energy_nb",
     "ebind_over_kt",
+    "TEMPORARY_EBIND_FACTOR",
+    "BINARY_CLASS_HARD",
+    "BINARY_CLASS_SOFT",
+    "BINARY_CLASS_TEMPORARY",
+    "BINARY_CLASS_ORDER",
+    "mean_core_interparticle_distance_au",
+    "classify_binaries",
+    "add_binary_energetics_and_class",
+    "drop_temporary_binaries",
 ]
 
 ArrayLike = Union[float, np.ndarray]
 
 _PC_TO_AU = constants.pc.to(u.AU).value
+
+# 2026-07 会议（examples/soft-hard-temp/meeting.md）定死的科学定义：暂时双星判据用
+# Ebind < TEMPORARY_EBIND_FACTOR * ECLOSE。不做成 config 项 -- ConfigManager._merge_user_config
+# 不合并用户 `physics:` 段，做了也只会静默用默认值；且分母/分类/图注三处需严格一致。
+TEMPORARY_EBIND_FACTOR: float = 1.0e-3
+
+BINARY_CLASS_HARD = "hard"
+BINARY_CLASS_SOFT = "soft"
+BINARY_CLASS_TEMPORARY = "temporary"
+BINARY_CLASS_ORDER = (BINARY_CLASS_HARD, BINARY_CLASS_SOFT, BINARY_CLASS_TEMPORARY)
 
 
 def binding_energy_nb(
@@ -47,25 +67,168 @@ def binding_energy_nb(
 
 
 def ebind_over_kt(ebind_nb: ArrayLike, eclose_nb: ArrayLike) -> ArrayLike:
-    """Binding energy in units of the hard/soft threshold ``eclose_nb``.
+    """Binding energy in units of a hard/soft threshold.
 
-    Plain division -- reusable for either the true per-snapshot ``ECLOSE``
-    (``snapshot_scalars.eclose_nb`` in the particle lake, which varies over
-    the run because ``adjust.F`` can re-tune it) or a fixed constant.
+    Plain division -- the caller decides what threshold to divide by.
 
-    step1 (``hdf5_reader.py:363``) always divides by the fixed config
-    constant ``config.ECLOSE_INPUT`` (default 1.0), *not* the real
-    per-snapshot ``eclose_nb`` -- even though ``eclose_nb`` varies
-    substantially within a single simulation (e.g. 0.003-1.0 in 20sb). This
-    is a known normalization issue in step1, out of scope to fix here; for
-    numerical continuity with step1's ``Ebind/kT``/``is_hard_binary``
-    columns, step2 callers should pass ``config.ECLOSE_INPUT`` (i.e. 1.0),
-    not the true ``eclose_nb``, and label results accordingly (see
-    ``examples/gaia_bh_formation/step2/findings.md``). A proper fix (using
-    the real time-varying threshold) is tracked as a separate future
-    project.
+    As of the 2026-07 soft/hard/temporary reclassification (see
+    ``examples/soft-hard-temp/meeting.md``), ``hdf5_reader.py``'s ``Ebind/kT``
+    column divides by ``TEMPORARY_EBIND_FACTOR * eclose_nb`` (the true
+    per-snapshot ``ECLOSE``, ``snapshot_scalars.eclose_nb`` in the particle
+    lake, which varies substantially within a run -- e.g. 0.003-1.0 in 20sb
+    -- because ``adjust.F`` re-tunes it), replacing the old fixed
+    ``config.ECLOSE_INPUT`` denominator. Older step2 scripts (e.g.
+    ``examples/gaia_bh_formation/step2/11_extract_lake_timelines.py``) still
+    pass ``config.ECLOSE_INPUT`` here for continuity with archived results;
+    new callers should pass ``TEMPORARY_EBIND_FACTOR * eclose_nb`` (see
+    ``classify_binaries``/``add_binary_energetics_and_class`` below) unless
+    they specifically need the legacy normalization.
     """
     return np.asarray(ebind_nb, dtype=float) / eclose_nb
+
+
+def mean_core_interparticle_distance_au(
+    nc: ArrayLike,
+    rc_nb: ArrayLike,
+    *,
+    rbar_pc: ArrayLike,
+) -> np.ndarray:
+    """Mean inter-particle spacing near the cluster core, from NC/RC geometry.
+
+    ``n_c = 3*NC / (4*pi*RC^3)`` (core number density, N-body units), then
+    ``d = n_c^(-1/3)`` (N-body length), converted to AU via ``RBAR``. Used as
+    the "temporary binary" distance threshold: a binary wider than this is
+    presumably not a real bound pair, just two unrelated stars passing close
+    in the dense core.
+
+    ``NC <= 0``, ``RC <= 0``, or NaN inputs return NaN (e.g. at ``t=0``
+    before ``adjust.F`` has defined a core) rather than raising or dividing
+    by zero.
+    """
+    nc_arr = np.asarray(nc, dtype=float)
+    rc_arr = np.asarray(rc_nb, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d_nb = np.cbrt(4.0 * np.pi * rc_arr**3 / (3.0 * nc_arr))
+    invalid = ~(nc_arr > 0) | ~(rc_arr > 0)
+    d_nb = np.where(invalid, np.nan, d_nb)
+    return d_nb * np.asarray(rbar_pc, dtype=float) * _PC_TO_AU
+
+
+def classify_binaries(
+    bin_label: ArrayLike,
+    a_au: ArrayLike,
+    ebind_nb: ArrayLike,
+    *,
+    eclose_nb: ArrayLike,
+    mean_core_distance_au: ArrayLike,
+    temporary_ebind_factor: float = TEMPORARY_EBIND_FACTOR,
+) -> np.ndarray:
+    """Classify binaries as hard / temporary / soft (checked in that priority order).
+
+    - **hard**: ``bin_label == 1`` (binary-table "KS binary" label), unconditionally.
+    - **temporary**: not hard, *and* wider than the core spacing
+      (``a_au > mean_core_distance_au``), *and* weakly bound
+      (``ebind_nb < temporary_ebind_factor * eclose_nb``). These are binary-table
+      false positives -- two stars caught transiently close together -- expected
+      to be disrupted almost immediately.
+    - **soft**: everything else.
+
+    Never raises; every edge case degrades to a safe classification via plain
+    NaN-comparison semantics (comparisons against NaN are always False):
+    ``bin_label`` in ``{-9, 0, -1}`` (unknown/wide/merger-internal) is simply
+    not hard and falls through to the energy/distance test; ``eclose_nb <= 0``
+    or NaN, ``mean_core_distance_au`` NaN (``NC``/``RC`` = 0, e.g. ``t=0``), or
+    NaN ``a_au``/``ebind_nb`` all make the temporary test False, leaving the
+    row soft (unless it was already hard).
+    """
+    bin_label_arr = np.asarray(bin_label)
+    a_arr = np.asarray(a_au, dtype=float)
+    ebind_arr = np.asarray(ebind_nb, dtype=float)
+    eclose_arr = np.asarray(eclose_nb, dtype=float)
+    distance_arr = np.asarray(mean_core_distance_au, dtype=float)
+
+    is_hard = bin_label_arr == 1
+    is_temporary = (
+        ~is_hard
+        & (eclose_arr > 0)
+        & (a_arr > distance_arr)
+        & (ebind_arr < temporary_ebind_factor * eclose_arr)
+    )
+    return np.select(
+        [is_hard, is_temporary],
+        [BINARY_CLASS_HARD, BINARY_CLASS_TEMPORARY],
+        default=BINARY_CLASS_SOFT,
+    )
+
+
+def add_binary_energetics_and_class(
+    binaries: pd.DataFrame,
+    scalars: pd.DataFrame,
+    *,
+    temporary_ebind_factor: float = TEMPORARY_EBIND_FACTOR,
+) -> pd.DataFrame:
+    """Read-time helper for particle-lake consumers: join per-snapshot scalars
+    onto a ``snapshot_binaries`` frame and add ``ebind_nb``,
+    ``mean_core_distance_au``, ``ebind_over_kt`` (new ECLOSE-normalized
+    definition), and ``binary_class``.
+
+    The lake itself stays schema-frozen (raw columns only, see
+    ``nbody_pipeline.analysis.particle_lake``); callers that want
+    energetics/classification call this after reading instead. Joins
+    ``scalars[["simulation_id", "ttot", "zmbar_msun", "rbar_pc", "eclose_nb",
+    "rc_nb", "nc"]]`` onto ``binaries`` on ``["simulation_id", "ttot"]`` (or
+    just ``["ttot"]`` if either frame lacks ``simulation_id``, e.g. a
+    single-simulation subset). Returns a new DataFrame; ``binaries`` and
+    ``scalars`` are not mutated.
+    """
+    join_cols = ["ttot", "zmbar_msun", "rbar_pc", "eclose_nb", "rc_nb", "nc"]
+    join_keys = ["ttot"]
+    if "simulation_id" in binaries.columns and "simulation_id" in scalars.columns:
+        join_cols = ["simulation_id"] + join_cols
+        join_keys = ["simulation_id"] + join_keys
+
+    merged = binaries.merge(scalars[join_cols], on=join_keys, how="left")
+
+    merged["ebind_nb"] = binding_energy_nb(
+        merged["mass_1_msun"].to_numpy(dtype=float),
+        merged["mass_2_msun"].to_numpy(dtype=float),
+        merged["semi_major_axis_au"].to_numpy(dtype=float),
+        zmbar_msun=merged["zmbar_msun"].to_numpy(dtype=float),
+        rbar_pc=merged["rbar_pc"].to_numpy(dtype=float),
+    )
+    merged["mean_core_distance_au"] = mean_core_interparticle_distance_au(
+        merged["nc"].to_numpy(dtype=float),
+        merged["rc_nb"].to_numpy(dtype=float),
+        rbar_pc=merged["rbar_pc"].to_numpy(dtype=float),
+    )
+    merged["ebind_over_kt"] = ebind_over_kt(
+        merged["ebind_nb"].to_numpy(dtype=float),
+        temporary_ebind_factor * merged["eclose_nb"].to_numpy(dtype=float),
+    )
+    merged["binary_class"] = classify_binaries(
+        merged["bin_label"].to_numpy(),
+        merged["semi_major_axis_au"].to_numpy(dtype=float),
+        merged["ebind_nb"].to_numpy(dtype=float),
+        eclose_nb=merged["eclose_nb"].to_numpy(dtype=float),
+        mean_core_distance_au=merged["mean_core_distance_au"].to_numpy(dtype=float),
+        temporary_ebind_factor=temporary_ebind_factor,
+    )
+    return merged
+
+
+def drop_temporary_binaries(
+    binary_df: pd.DataFrame, *, class_col: str = "binary_class"
+) -> pd.DataFrame:
+    """Remove rows classified as ``temporary`` (binary-table false positives).
+
+    Rows with a missing ``class_col`` (column absent) or NaN class are kept
+    conservatively -- we don't know they're safe to drop. Returns a copy;
+    ``binary_df`` is not mutated.
+    """
+    if class_col not in binary_df.columns:
+        return binary_df.copy()
+    is_temporary = binary_df[class_col] == BINARY_CLASS_TEMPORARY
+    return binary_df.loc[~is_temporary].copy()
 
 
 def compute_binary_orbit_relative_positions(

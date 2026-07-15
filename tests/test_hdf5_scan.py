@@ -223,9 +223,9 @@ def test_hdf5_file_processor_reads_selected_feather_tables(tmp_path: Path) -> No
     pd.DataFrame({"TTOT": [1.0], "Time[Myr]": [10.0], "unused": [0]}).to_feather(
         hdf5_path + ".scalars.df.feather"
     )
-    pd.DataFrame({"TTOT": [1.0], "Bin KW1": [14], "unused": [0]}).to_feather(
-        hdf5_path + ".binaries.df.feather"
-    )
+    pd.DataFrame(
+        {"TTOT": [1.0], "Bin KW1": [14], "unused": [0], "binary_class": ["hard"]}
+    ).to_feather(hdf5_path + ".binaries.df.feather")
     processor.read_file = Mock(side_effect=AssertionError("should not parse full HDF5"))
 
     result = processor.read_tables(

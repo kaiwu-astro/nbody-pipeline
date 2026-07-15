@@ -97,6 +97,11 @@ BINARY_TARGETS: tuple[PlotTarget, ...] = (
         "create_ebind_semi_plot_jpg_compact_object_only",
         "ebind_vs_a_loglog_compact_objects_only",
     ),
+    PlotTarget(
+        "binary",
+        "create_ebind_semi_plot_class_scatter",
+        "ebind_vs_a_loglog_class_scatter",
+    ),
     PlotTarget("binary", "create_ecc_semi_plot_density", "ecc_vs_a"),
     PlotTarget(
         "binary", "create_ecc_semi_plot_jpg_compact_object_only", "ecc_vs_a_compact_objects_only"

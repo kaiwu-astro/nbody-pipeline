@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -223,6 +223,147 @@ class BaseHDF5Visualizer(BaseVisualizer):
         g = sns.jointplot(
             data=processed_df, x=x_col, y=y_col, kind="hist", bins=100, log_scale=log_scale
         )
+
+        if extra_ax_handler is not None:
+            extra_ax_handler(g.ax_joint)
+
+        self.decorate_jointfig(
+            g.ax_joint,
+            processed_df,
+            x_col,
+            y_col,
+            self.config.limits[xlim_key],
+            self.config.limits[ylim_key],
+            simu_name,
+            ttot,
+            tmyr,
+            t_over_tcr0,
+            t_over_trh0,
+        )
+
+        if custom_ax_joint_decorator is not None:
+            custom_ax_joint_decorator(g.ax_joint, processed_df)
+
+        add_grid(g.ax_joint)
+        g.savefig(save_jpg_path)
+        if save_pdf:
+            g.savefig(save_pdf_path)
+        try:
+            __IPYTHON__
+            if self.config.close_figure_in_ipython:
+                plt.close(g.figure)
+        except NameError:
+            plt.close(g.figure)
+
+    def _create_jointplot_class_scatter(
+        self,
+        df_at_t: pd.DataFrame,
+        simu_name: str,
+        x_col: str,
+        y_col: str,
+        hue_col: str,
+        hue_order: Sequence[str],
+        palette: Mapping[str, str],
+        log_scale: Tuple[bool, bool],
+        filename_var_part: str,
+        xlim_key: Optional[str] = None,
+        ylim_key: Optional[str] = None,
+        extra_data_handler: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
+        extra_ax_handler: Optional[Callable[[plt.Axes], None]] = None,
+        custom_ax_joint_decorator: Optional[Callable[[plt.Axes, pd.DataFrame], None]] = None,
+        save_pdf=False,
+    ) -> None:
+        """
+        Helper function to create hue-classified scatter jointplots with
+        stacked marginal histograms, built directly on ``sns.JointGrid``.
+
+        Parallel engine to ``_create_jointplot_density`` (unchanged) -- that
+        one uses ``sns.jointplot(kind="hist")``, which has no per-point hue
+        coloring, so a classification scatter (e.g. hard/soft/temporary
+        binaries) needs this separate engine instead. Everything else
+        (filename template, ``skip_existing_plot``, ``decorate_jointfig``,
+        ``add_grid``, save/close) matches ``_create_jointplot_density``.
+
+        Args:
+            df_at_t: DataFrame containing plot data
+            simu_name: Simulation name
+            x_col: Column name for x-axis
+            y_col: Column name for y-axis
+            hue_col: Column name to color points/marginal bars by
+            hue_order: Fixed category order for hue/legend/stacking
+            palette: Mapping from hue category to color
+            log_scale: Tuple (bool, bool) indicating whether x and y axes use log scale
+            filename_var_part: Variable part for constructing filename
+            xlim_key: Key for x-axis limits in self.config.limits, defaults to x_col
+            ylim_key: Key for y-axis limits in self.config.limits, defaults to y_col
+            extra_data_handler: Optional callback to process DataFrame before plotting
+            extra_ax_handler: Optional callback to customize joint axes after main plot
+            custom_ax_joint_decorator: Optional callback for specific ax_joint operations
+                                       after decorate_jointfig and before saving
+        """
+        if xlim_key is None:
+            xlim_key = x_col
+        if ylim_key is None:
+            ylim_key = y_col
+        ttot = df_at_t["TTOT"].iloc[0]
+        tmyr = df_at_t["Time[Myr]"].iloc[0]
+        t_over_tcr0 = df_at_t["TTOT/TCR0"].iloc[0]
+        t_over_trh0 = df_at_t["TTOT/TRH0"].iloc[0]
+
+        processed_df = df_at_t
+        if extra_data_handler is not None:
+            processed_df = extra_data_handler(df_at_t)
+
+        base_filename = (
+            f"{self.config.figname_prefix[simu_name]}output_ttot_{ttot}_{filename_var_part}"
+        )
+        save_pdf_path = f"{self.config.plot_dir}/{base_filename}.pdf"
+        save_jpg_path = f"{self.config.plot_dir}/jpg/{base_filename}.jpg"
+
+        if self.config.skip_existing_plot and os.path.exists(save_jpg_path):
+            logger.debug(f"Skip existing plot: {save_jpg_path}")
+            return
+
+        g = sns.JointGrid(data=processed_df, x=x_col, y=y_col)
+        sns.scatterplot(
+            data=processed_df,
+            x=x_col,
+            y=y_col,
+            hue=hue_col,
+            hue_order=hue_order,
+            palette=palette,
+            s=12,
+            alpha=0.5,
+            linewidth=0,
+            ax=g.ax_joint,
+        )
+        sns.histplot(
+            data=processed_df,
+            x=x_col,
+            hue=hue_col,
+            hue_order=hue_order,
+            palette=palette,
+            multiple="stack",
+            bins=100,
+            log_scale=log_scale[0],
+            legend=False,
+            ax=g.ax_marg_x,
+        )
+        sns.histplot(
+            data=processed_df,
+            y=y_col,
+            hue=hue_col,
+            hue_order=hue_order,
+            palette=palette,
+            multiple="stack",
+            bins=100,
+            log_scale=log_scale[1],
+            legend=False,
+            ax=g.ax_marg_y,
+        )
+        # 兜底显式设置 joint 轴 scale：某些空/单类别帧 histplot 可能不触发 log 轴。
+        g.ax_joint.set_xscale("log" if log_scale[0] else "linear")
+        g.ax_joint.set_yscale("log" if log_scale[1] else "linear")
 
         if extra_ax_handler is not None:
             extra_ax_handler(g.ax_joint)
