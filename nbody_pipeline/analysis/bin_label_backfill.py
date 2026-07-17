@@ -33,6 +33,7 @@ import os
 import time
 from typing import TYPE_CHECKING, Any, Dict, Mapping
 
+import duckdb
 import numpy as np
 import pandas as pd
 
@@ -180,14 +181,20 @@ def backfill_parts(
         if not part_path.exists():
             continue
 
-        rows = pd.read_parquet(part_path)
-        if "bin_label" not in rows.columns:
+        # Cheap pre-check: read only the bin_label column (parquet is columnar,
+        # so this is a fraction of the part's I/O) before paying for a full read
+        # of every other column -- the large majority of parts on a real archive
+        # have zero -9 rows and can be skipped this way.
+        try:
+            bin_label_probe = pd.read_parquet(part_path, columns=["bin_label"])["bin_label"]
+        except (KeyError, ValueError):
             continue
-        original = rows["bin_label"].to_numpy(dtype="int32")
-        unknown_before = int((original == _BIN_LABEL_UNKNOWN).sum())
+        unknown_before = int((bin_label_probe.to_numpy(dtype="int32") == _BIN_LABEL_UNKNOWN).sum())
         if unknown_before == 0:
             continue
 
+        rows = pd.read_parquet(part_path)
+        original = rows["bin_label"].to_numpy(dtype="int32")
         new_labels = reconstruct_bin_label(rows, nzero)
         changed = not np.array_equal(new_labels, original)
         counts = {
@@ -229,7 +236,23 @@ def _write_provenance(task: "SnapshotBinariesTask", report: Mapping[str, Any]) -
     os.replace(tmp_path, sidecar_path)
 
 
-def validate_reconstruction(task: "SnapshotBinariesTask", nzero: int) -> Dict[str, Any]:
+_VALIDATE_DEFAULT_SAMPLE_SIZE = 5_000_000
+
+_VALIDATE_EMPTY_RESULT: Dict[str, Any] = {
+    "confusion_matrix": {},
+    "n_known": 0,
+    "accuracy": None,
+    "nzero_consistent": None,
+    "sampled": False,
+}
+
+
+def validate_reconstruction(
+    task: "SnapshotBinariesTask",
+    nzero: int,
+    *,
+    sample_size: int | None = _VALIDATE_DEFAULT_SAMPLE_SIZE,
+) -> Dict[str, Any]:
     """Cross-tabulate reconstructed vs. true ``bin_label`` on a simulation that
     already has real (non ``-9``) labels for at least some rows.
 
@@ -239,15 +262,31 @@ def validate_reconstruction(task: "SnapshotBinariesTask", nzero: int) -> Dict[st
     asked to recover it. Also reports whether
     ``min(cm_id where bin_label == 1) > nzero`` holds, a cheap sanity check on
     ``nzero`` itself, independent of the classification rules.
+
+    Real ``snapshot_binaries`` tables are hundreds of GB / billions of rows --
+    far too large to materialize whole in a pandas DataFrame (this has been
+    measured to exceed a login node's memory budget). The "known" subset is
+    therefore pulled via DuckDB with column projection (only the 6 columns
+    ``reconstruct_bin_label`` needs) and, by default, reservoir-sampled down to
+    ``sample_size`` rows directly during the Parquet scan -- DuckDB does the
+    filtering/sampling out-of-core, so only the (bounded) sample is ever
+    materialized in Python. Pass ``sample_size=None`` to read every known row
+    instead (fine for small tables, e.g. tests).
     """
     data_dir = task.data_dir
     if not data_dir.exists() or not any(data_dir.glob("*.parquet")):
-        return {"confusion_matrix": {}, "n_known": 0, "accuracy": None, "nzero_consistent": None}
+        return dict(_VALIDATE_EMPTY_RESULT)
 
-    df = pd.read_parquet(data_dir)
-    known = df.loc[df["bin_label"] != _BIN_LABEL_UNKNOWN].copy()
+    glob_path = str(data_dir / "*.parquet")
+    query = (
+        "SELECT cm_id, object_id_1, object_id_2, pert_gamma, cm_kw, bin_label "
+        f"FROM read_parquet('{glob_path}') WHERE bin_label != {_BIN_LABEL_UNKNOWN}"
+    )
+    if sample_size is not None:
+        query += f" USING SAMPLE reservoir({int(sample_size)} ROWS)"
+    known = duckdb.sql(query).df()
     if known.empty:
-        return {"confusion_matrix": {}, "n_known": 0, "accuracy": None, "nzero_consistent": None}
+        return dict(_VALIDATE_EMPTY_RESULT)
 
     truth = known["bin_label"].to_numpy(dtype="int32")
     forced_unknown = known.copy()
@@ -266,6 +305,7 @@ def validate_reconstruction(task: "SnapshotBinariesTask", nzero: int) -> Dict[st
         "n_known": int(len(known)),
         "accuracy": float((truth == predicted).mean()),
         "nzero_consistent": nzero_consistent,
+        "sampled": sample_size is not None,
     }
 
 
