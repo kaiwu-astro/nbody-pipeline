@@ -23,6 +23,20 @@ description in ``schemas/snapshot_binaries.yaml``):
 4. Otherwise, ``pert_gamma == float32(0.1)`` (the ``GALIMIT`` constant,
    ``custom_output.F:415``) -> ``-1`` (hierarchical/outer binary); anything
    still unclassified is left at ``-9``, conservatively.
+
+Known limitation (measured on real 20sb data via ``validate_reconstruction``,
+sample of ~4.14M known-label rows, 2026-07-17): accuracy 99.998%. The
+~0.002% of errors are all one-directional -- real wide binaries
+(``bin_label == 0``) whose ``cm_kw`` is *not* ``-1`` and whose ``pert_gamma``
+is a small nonzero value (not the hard-coded ``0.0``, ~1e-7-1e-6 in the
+observed mismatches) fail rule 2's guard and fall through to rule 3, where
+their ``cm_id`` numerically collides with ``NZERO + object_id_1`` by chance
+(the same IWBINC/KS-name-range collision documented on ``cm_id`` -- rule 2
+does not fully close it, since not every real wide binary hits the
+hard-coded ``G=0``/``cm_kw=-1`` path). Net effect: a small fraction of true
+wide binaries get reconstructed as hard (never the reverse in the observed
+sample). Accepted as a known, documented limitation rather than blocking the
+backfill on files with no ground truth at all.
 """
 
 from __future__ import annotations

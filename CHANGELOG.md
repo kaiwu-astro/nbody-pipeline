@@ -249,6 +249,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Name"` instead of `"Bin Label"`) -- `particle_lake.py`'s raw reader already maps
   that fallback name to the same logical column, so those files are correctly
   excluded from backfill by construction (only genuine `-9` rows are ever touched).
+  `validate_reconstruction` reads via DuckDB with column projection and (by default)
+  reservoir sampling directly during the Parquet scan rather than materializing a
+  whole table in pandas -- measured necessary against the real lake
+  (`snapshot_binaries` alone is 120-230GB compressed / 1.5-2.4B rows per simulation
+  for `0sb`/`20sb`/`60sb`), and `backfill_parts` probes each part's `bin_label`
+  column alone before reading the rest, since most real parts have zero `-9` rows.
+  Run against real `20sb` data (~4.14M sampled known-label rows): 99.998% accuracy;
+  the ~0.002% of errors are one-directional -- a small number of true wide binaries
+  (`bin_label == 0`) whose `cm_kw != -1` and whose `pert_gamma` is a small nonzero
+  value (not the hard-coded `0.0`) skip rule 2's guard and get reconstructed as hard
+  via rule 3's `cm_id` numeric coincidence with `NZERO + object_id_1` -- the same
+  collision risk already documented on `snapshot_binaries.cm_id`, just not fully
+  closed by rule 2 for this subset of real wide binaries. Accepted as a known,
+  documented limitation (see `bin_label_backfill.py`'s module docstring) rather than
+  blocking reconstruction on files with no ground truth at all.
 
 ## [1.0.0] - 2026-07-10
 
