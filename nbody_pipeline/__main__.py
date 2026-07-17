@@ -34,7 +34,14 @@ from nbody_pipeline.analysis import (
     GalacticOrbitProcessor,
     ParticleLakeProcessor,
     ParticleTracker,
+    SnapshotBinariesTask,
+    SnapshotScalarsTask,
     SnapshotSummaryProcessor,
+)
+from nbody_pipeline.analysis.bin_label_backfill import (
+    backfill_parts,
+    resolve_nzero,
+    validate_reconstruction,
 )
 from nbody_pipeline.analysis.cache_paths import (
     COMPACT_OBJECT_HISTORY_FEATURE,
@@ -460,6 +467,59 @@ def _resolve_analyze_features(raw: str) -> set[str]:
     return resolved
 
 
+def _build_backfill_bin_label_parser() -> argparse.ArgumentParser:
+    """Build the backfill-bin-label subcommand parser."""
+    parser = argparse.ArgumentParser(prog="python -m nbody_pipeline backfill-bin-label")
+    parser.add_argument(
+        "--simu",
+        dest="simu_name",
+        help="Limit to one simulation (default: all configured)",
+    )
+    parser.add_argument(
+        "--config", help="Path to user config YAML (" + _CONFIG_DISCOVERY_HELP + ")"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report counts without writing any Parquet part",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help=(
+            "Validate the reconstruction algorithm against a simulation that already "
+            "has real bin_label values, instead of backfilling -9 rows"
+        ),
+    )
+    parser.add_argument(
+        "--nzero",
+        action="append",
+        default=[],
+        metavar="SIMU=N",
+        help=(
+            "Explicit NZERO override for one simulation (repeatable); required when "
+            "the earliest cached snapshot_scalars ttot for that simulation is not 0"
+        ),
+    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    return parser
+
+
+def _parse_nzero_overrides(raw_values: list[str]) -> dict[str, int]:
+    """Parse repeated --nzero SIMU=N values into {simu_name: nzero}."""
+    overrides: dict[str, int] = {}
+    for raw in raw_values:
+        if "=" not in raw:
+            raise ValueError(f"--nzero value must be SIMU=N, got {raw!r}")
+        simu_name, _, value = raw.partition("=")
+        simu_name = simu_name.strip()
+        try:
+            overrides[simu_name] = int(value.strip())
+        except ValueError as exc:
+            raise ValueError(f"--nzero value must be SIMU=N with integer N, got {raw!r}") from exc
+    return overrides
+
+
 def _build_main_parser() -> argparse.ArgumentParser:
     """Build the top-level CLI help parser."""
     parser = argparse.ArgumentParser(
@@ -489,6 +549,10 @@ def _build_main_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "analyze", help="Build/update the Parquet feature store (--features pilot|lake|<name>)"
     )
+    subparsers.add_parser(
+        "backfill-bin-label",
+        help="Reconstruct snapshot_binaries.bin_label for pre-'Bin Label' HDF5 files",
+    )
     subparsers.add_parser("help", help="Show this help, or help for a command")
 
     parser.epilog = (
@@ -500,6 +564,8 @@ def _build_main_parser() -> argparse.ArgumentParser:
         "  python -m nbody_pipeline purge --list-targets\n"
         "  python -m nbody_pipeline analyze --simu 20sb\n"
         "  python -m nbody_pipeline analyze --simu 20sb --features lake\n"
+        "  python -m nbody_pipeline backfill-bin-label --simu 20sb --dry-run\n"
+        "  python -m nbody_pipeline backfill-bin-label --simu 20sb\n"
         "\n"
         "No config source (--config / NBODY_CONFIG / ./nbody_config.yaml) is\n"
         "required for --help/help/purge --list-targets; the main pipeline and other\n"
@@ -521,6 +587,9 @@ def _print_help_topic(topic: str | None) -> int:
         return 0
     if topic == "analyze":
         _build_analyze_parser().print_help()
+        return 0
+    if topic == "backfill-bin-label":
+        _build_backfill_bin_label_parser().print_help()
         return 0
 
     print(f"Unknown help topic: {topic}")
@@ -639,6 +708,65 @@ def _main_analyze(argv: list[str]) -> int:
     return 0
 
 
+def _main_backfill_bin_label(argv: list[str]) -> int:
+    """Run the backfill-bin-label CLI subcommand."""
+    if argv in (["-h"], ["--help"], ["help"]):
+        _build_backfill_bin_label_parser().print_help()
+        return 0
+    parser = _build_backfill_bin_label_parser()
+    args = parser.parse_args(argv)
+
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(name)s: %(message)s")
+    else:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
+
+    config = ConfigManager(config_path=_resolve_config_path(args.config))
+
+    if args.simu_name is not None and args.simu_name not in config.pathof:
+        parser.error(f"Unknown simulation: {args.simu_name}")
+    simu_names = [args.simu_name] if args.simu_name else list(config.pathof.keys())
+
+    try:
+        nzero_overrides = _parse_nzero_overrides(args.nzero)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    exit_code = 0
+    for simu_name in simu_names:
+        binaries_task = SnapshotBinariesTask(config, simu_name)
+        scalars_task = SnapshotScalarsTask(config, simu_name)
+
+        if args.validate:
+            nzero_override = nzero_overrides.get(simu_name)
+            if nzero_override is None:
+                scalars_df = scalars_task.finalize_cache(scalars_task.read_cache())
+                try:
+                    nzero = resolve_nzero(scalars_df, simu_name)
+                except ValueError as exc:
+                    print(f"[{simu_name}] validate skipped: {exc}")
+                    exit_code = 1
+                    continue
+            else:
+                nzero = nzero_override
+            report = validate_reconstruction(binaries_task, nzero)
+            print(f"[{simu_name}] validate (nzero={nzero}): {report}")
+            continue
+
+        scalars_df = scalars_task.finalize_cache(scalars_task.read_cache())
+        try:
+            nzero = resolve_nzero(scalars_df, simu_name, nzero_overrides.get(simu_name))
+        except ValueError as exc:
+            print(f"[{simu_name}] skipped: {exc}")
+            exit_code = 1
+            continue
+
+        report = backfill_parts(binaries_task, {simu_name: nzero}, dry_run=args.dry_run)
+        print(f"[{simu_name}] nzero={nzero} dry_run={args.dry_run}: {report}")
+
+    return exit_code
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main CLI entry point."""
     if argv is None:
@@ -654,6 +782,8 @@ def main(argv: list[str] | None = None) -> int:
         return _main_purge(argv[1:])
     if argv and argv[0] == "analyze":
         return _main_analyze(argv[1:])
+    if argv and argv[0] == "backfill-bin-label":
+        return _main_backfill_bin_label(argv[1:])
 
     try:
         long_options = ["skip-until=", "config=", "debug"]

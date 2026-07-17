@@ -223,6 +223,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not a bug -- the `-9`-sentinel fallback (all binaries classified non-hard) is
   correct behaviour for that window, not something to work around.
 
+### Added
+- `nbody_pipeline.analysis.bin_label_backfill` (`python -m nbody_pipeline
+  backfill-bin-label`): reconstructs `snapshot_binaries.bin_label` for the ~1258
+  cached parquet rows still carrying the `-9` ("unknown") sentinel because their
+  source HDF5 predates the `"176 Bin Label"`/`"176 Bin cm Name"` dataset (NBODY6++GPU
+  commit `1381398e`, corrected `b9ac5a0e`). The label is fully derivable from fields
+  present in every source version (>= Aug2021): KS pairs' cm name is `NZERO` +
+  first-member `NAME` at pairing time (`ksinit.F:30`); the wide branch hard-codes
+  `GAMMA=0`/`cm_kw=-1`; the merger branch negates the cm name (`merge.f:263`); the
+  remainder falls to the `GALIMIT` perturbation threshold (`custom_output.F:415`) for
+  hierarchical/outer binaries. `reconstruct_bin_label` is a pure, vectorized function
+  applied only to `-9` rows (real labels are never touched); `resolve_nzero` infers
+  NZERO from the cached `snapshot_scalars` row at `ttot == 0` (or takes an explicit
+  `--nzero SIMU=N` override) and refuses to guess if the cache's earliest row isn't
+  really `t=0`; `backfill_parts` rewrites only the affected Parquet parts in place via
+  the existing `write_part` (same deterministic part filename, so neither the
+  manifest nor `schema_hash` changes -- no full-rebuild trigger) and is idempotent (a
+  part with nothing left to change is not rewritten). `--validate` cross-tabulates the
+  algorithm against a simulation that already has real labels before it's trusted on
+  data with no ground truth. A separate contamination audit (all 1249
+  `job-*.out` + per-file HDF5 dataset-name checks) found 202 archived files
+  mislabeled by a short-lived buggy build (between the two commits above) that
+  already carry a *real* value under the same `"176"` slot (just named `"Bin cm
+  Name"` instead of `"Bin Label"`) -- `particle_lake.py`'s raw reader already maps
+  that fallback name to the same logical column, so those files are correctly
+  excluded from backfill by construction (only genuine `-9` rows are ever touched).
+
 ## [1.0.0] - 2026-07-10
 
 Initial tagged release, consolidating roughly a year of iterative development into a

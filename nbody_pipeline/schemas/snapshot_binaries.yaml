@@ -88,7 +88,13 @@ columns:
       Binary classification (raw HDF5 Bin Label): 1 = regular KS-regularized binary, 0 =
       wide/unperturbed binary, -1 = internal binary of a merger product, -9 = unknown
       (source HDF5 file predates the "176 Bin Label"/"176 Bin cm Name" dataset -- all
-      other columns are unaffected, confirmed against real archived data).
+      other columns are unaffected, confirmed against real archived data). ``-9`` rows
+      can be recomputed post-hoc from other always-present fields (cm-particle naming
+      NZERO + first-member NAME for KS pairs, the wide branch's hard-coded
+      GAMMA=0/cm_kw=-1, the merger branch's negative cm name, and the GALIMIT threshold
+      for hierarchical binaries -- see ``nbody_pipeline.analysis.bin_label_backfill``
+      and ``python -m nbody_pipeline backfill-bin-label``); rows that already carry a
+      real value here are never touched by that reconstruction.
     public: true
     nullable: false
   - name: mass_1_msun

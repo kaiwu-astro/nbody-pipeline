@@ -51,6 +51,13 @@ from nbody_pipeline.analysis.kstar_semantics import (
     decode_member_kw,
     annotate_binary_states,
 )
+from nbody_pipeline.analysis.bin_label_backfill import (
+    ALGORITHM_VERSION as BIN_LABEL_BACKFILL_ALGORITHM_VERSION,
+    reconstruct_bin_label,
+    resolve_nzero,
+    backfill_parts,
+    validate_reconstruction,
+)
 
 __all__ = [
     "ParticleTracker",
@@ -90,4 +97,9 @@ __all__ = [
     "decode_cm_kstar",
     "decode_member_kw",
     "annotate_binary_states",
+    "BIN_LABEL_BACKFILL_ALGORITHM_VERSION",
+    "reconstruct_bin_label",
+    "resolve_nzero",
+    "backfill_parts",
+    "validate_reconstruction",
 ]
