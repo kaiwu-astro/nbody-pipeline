@@ -368,18 +368,27 @@ analysis/data-reduction 产生的中间结果缓存统一放在 `paths.analysis_
 `paths.lake_dir`（可选，第二存储根，`config.lake_dir_of[simu_name] == <lake_dir>/<simu_name>`）时把它们
 路由到那里，未配置时回落到 `analysis_cache_dir`（向后兼容）。这四张表覆盖每个 snapshot 的全部
 singles/binaries/mergers/scalars 原始列（体量远大于 `compact_object_history`），走
-`hdf5_reader_kind = "raw"`（`HDF5FileProcessor.read_raw_tables`）读取，绕过 `read_file` 的全部派生列
-（含 NS/BH 展示裁剪）。构建方式：`python -m nbody_pipeline analyze --features lake`；nightly
-`update_analysis_store` **不**自动构建它（体量原因）。全量重建前先跑
-`scripts/lake_preflight.py` 排查跨 run 目录的重复/重叠 TTOT。详见
+`hdf5_reader_kind = "source"`（`HDF5FileProcessor.read_raw_tables`，`simu_name=None`）读取——始终直接
+解析源 HDF5，从不回读自己正在建的湖，绕过 `read_file` 的全部派生列（含 NS/BH 展示裁剪）。构建方式：
+`python -m nbody_pipeline analyze --features lake`；nightly `update_analysis_store` **不**自动构建它
+（体量原因）。全量重建前先跑 `scripts/lake_preflight.py` 排查跨 run 目录的重复/重叠 TTOT。详见
 `docs/analysis_architecture.md` Roadmap #5。
 
+**`hdf5_reader_kind` 三档语义（分析任务默认走湖）：** `HDF5ScanTask.hdf5_reader_kind` 可选
+`"processed"`（默认，`read_tables`→`read_file`，湖优先派生列）/`"raw"`（`read_raw_tables`，
+湖优先重建原始列名/数值，无派生列，缺湖数据时回退直接解析 HDF5）/`"source"`（`read_raw_tables`，
+`simu_name=None`，恒直读源 HDF5，从不碰湖）。**分析任务默认应该走湖**（`"processed"`/`"raw"` 均湖优先
++ 缺数据时回退）；只有 particle lake 自身的四个建湖任务用 `"source"`，防止建湖时读到自己（可能过期/
+不完整）的湖形成循环。
+
 **HDF5 I/O 加速缓存（已于 2026-07 移除）：**
-`.h5part.*.df.feather`（挨着源 `.h5part` 文件写的 L1 缓存）已完全移除。`read_file` 现在优先从
-particle lake（上面的 `snapshot_singles`/`snapshot_binaries`/`snapshot_scalars`，若该文件已建湖）
-反推出旧的原始 HDF5 列名/数值来跑派生列计算，未建湖时回退直接解析 HDF5，两条路径都不再写任何缓存。
-详见 `docs/analysis_architecture.md` 的 L1 retirement 说明与
-`nbody_pipeline.io.hdf5_reader._raw_tables_from_lake`。
+`.h5part.*.df.feather`（挨着源 `.h5part` 文件写的 L1 缓存）已完全移除。`read_file`（`"processed"`）与
+`read_raw_tables`（`"raw"`）现在都优先从 particle lake（`snapshot_singles`/`snapshot_binaries`/
+`snapshot_mergers`/`snapshot_scalars`，若该文件已建湖）反推出旧的原始 HDF5 列名/数值——前者据此跑
+派生列计算，后者做窄列投影重建——未建湖或所需列无湖对应时回退直接解析 HDF5，两条路径都不再写任何缓存。
+详见 `docs/analysis_architecture.md` 的 L1 retirement 说明、
+`nbody_pipeline.io.hdf5_reader._raw_tables_from_lake`（`read_file` 用，全列）与
+`_projected_raw_tables_from_lake`（`read_raw_tables` 用，投影）。
 
 **典型 Feather 缓存模式：**
 使用 Apache Arrow Feather 格式缓存 DataFrame，速度快且保留类型信息。保存 analysis 结果时，先通过缓存路径 helper 得到 feature 目录：

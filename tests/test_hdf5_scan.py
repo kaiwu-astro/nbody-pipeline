@@ -93,6 +93,7 @@ class FakeProcessor:
         self.tables_by_path = tables_by_path
         self.read_count = 0
         self.read_paths: list[str] = []
+        self.raw_simu_names: list = []
 
     def get_all_hdf5_paths(self, *args, **kwargs):
         return self.hdf5_paths
@@ -102,9 +103,10 @@ class FakeProcessor:
         self.read_paths.append(hdf5_path)
         return {table: self.tables_by_path[hdf5_path][table] for table in tables}
 
-    def read_raw_tables(self, hdf5_path, tables, columns_by_table=None):
+    def read_raw_tables(self, hdf5_path, tables, columns_by_table=None, *, simu_name=None):
         self.read_count += 1
         self.read_paths.append(hdf5_path)
+        self.raw_simu_names.append(simu_name)
         return {table: self.tables_by_path[hdf5_path][table] for table in tables}
 
 
@@ -123,10 +125,10 @@ class FailingProcessor(FakeProcessor):
             raise RuntimeError(f"failed to read {hdf5_path}")
         return super().read_tables(hdf5_path, simu_name, tables, columns_by_table)
 
-    def read_raw_tables(self, hdf5_path, tables, columns_by_table=None):
+    def read_raw_tables(self, hdf5_path, tables, columns_by_table=None, *, simu_name=None):
         if hdf5_path in self.fail_paths:
             raise RuntimeError(f"failed to read {hdf5_path}")
-        return super().read_raw_tables(hdf5_path, tables, columns_by_table)
+        return super().read_raw_tables(hdf5_path, tables, columns_by_table, simu_name=simu_name)
 
 
 class FakeContinuousProcessor:
@@ -500,6 +502,10 @@ class RawReaderTask(FakeTask):
     hdf5_reader_kind = "raw"
 
 
+class SourceReaderTask(FakeTask):
+    hdf5_reader_kind = "source"
+
+
 def test_mixed_hdf5_reader_kind_in_one_file_read_raises(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
@@ -521,6 +527,48 @@ def test_mixed_hdf5_reader_kind_in_one_file_read_raises(tmp_path: Path) -> None:
         )
 
 
+def test_mixed_hdf5_reader_kind_raw_and_source_raises(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
+    Path(hdf5_path).write_text("fake")
+    tables = {
+        hdf5_path: {
+            "scalars": pd.DataFrame({"TTOT": [1.0]}),
+            "binaries": pd.DataFrame({"TTOT": [1.0]}),
+        }
+    }
+    processor = FakeProcessor([hdf5_path], tables)
+    runner = HDF5ScanRunner(config, processor)
+
+    with pytest.raises(ValueError, match="hdf5_reader_kind"):
+        runner.run(
+            "sim",
+            [RawReaderTask("raw"), SourceReaderTask("source")],
+            HDF5ScanOptions(wait_age_hour=0),
+        )
+
+
+def test_unknown_hdf5_reader_kind_raises(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
+    Path(hdf5_path).write_text("fake")
+    tables = {
+        hdf5_path: {
+            "scalars": pd.DataFrame({"TTOT": [1.0]}),
+            "binaries": pd.DataFrame({"TTOT": [1.0]}),
+        }
+    }
+
+    class BogusReaderTask(FakeTask):
+        hdf5_reader_kind = "bogus"
+
+    processor = FakeProcessor([hdf5_path], tables)
+    runner = HDF5ScanRunner(config, processor)
+
+    with pytest.raises(ValueError, match="Unknown hdf5_reader_kind"):
+        runner.run("sim", [BogusReaderTask("bogus")], HDF5ScanOptions(wait_age_hour=0))
+
+
 def test_raw_hdf5_reader_kind_calls_read_raw_tables(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
@@ -530,9 +578,11 @@ def test_raw_hdf5_reader_kind_calls_read_raw_tables(tmp_path: Path) -> None:
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.raw_calls = []
+            self.raw_call_simu_names = []
 
-        def read_raw_tables(self, hdf5_path, tables, columns_by_table=None):
+        def read_raw_tables(self, hdf5_path, tables, columns_by_table=None, *, simu_name=None):
             self.raw_calls.append(hdf5_path)
+            self.raw_call_simu_names.append(simu_name)
             return {table: self.tables_by_path[hdf5_path][table] for table in tables}
 
     tables = {
@@ -547,7 +597,84 @@ def test_raw_hdf5_reader_kind_calls_read_raw_tables(tmp_path: Path) -> None:
     runner.run("sim", [RawReaderTask("raw")], HDF5ScanOptions(wait_age_hour=0))
 
     assert processor.raw_calls == [hdf5_path]
+    assert processor.raw_call_simu_names == ["sim"]
     assert processor.read_count == 0
+
+
+def test_source_hdf5_reader_kind_reads_pure_hdf5(tmp_path: Path) -> None:
+    """ "source" tasks (the particle-lake build tasks) must pass simu_name=None,
+    so read_raw_tables never reads back from the lake it is building."""
+    config = make_config(tmp_path)
+    hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
+    Path(hdf5_path).write_text("fake")
+
+    class RawCapturingProcessor(FakeProcessor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.raw_call_simu_names = []
+
+        def read_raw_tables(self, hdf5_path, tables, columns_by_table=None, *, simu_name=None):
+            self.raw_call_simu_names.append(simu_name)
+            return {table: self.tables_by_path[hdf5_path][table] for table in tables}
+
+    tables = {
+        hdf5_path: {
+            "scalars": pd.DataFrame({"TTOT": [1.0]}),
+            "binaries": pd.DataFrame({"TTOT": [1.0]}),
+        }
+    }
+    processor = RawCapturingProcessor([hdf5_path], tables)
+    runner = HDF5ScanRunner(config, processor)
+
+    runner.run("sim", [SourceReaderTask("source")], HDF5ScanOptions(wait_age_hour=0))
+
+    assert processor.raw_call_simu_names == [None]
+
+
+def test_merge_columns_by_table_single_task_column_list_is_registered() -> None:
+    """Regression for the bug where the first task to declare a non-None column
+    list for a table was silently dropped (never registered), so projection
+    never actually took effect -- see hdf5_scan._merge_columns_by_table."""
+
+    class ColTask:
+        name = "t"
+        required_tables = ("binaries",)
+        columns_by_table = {"binaries": ["Bin Name1", "Bin Name2"]}
+
+    result = hdf5_scan._merge_columns_by_table([ColTask()])
+
+    assert result == {"binaries": ["Bin Name1", "Bin Name2"]}
+
+
+def test_merge_columns_by_table_none_wins_regardless_of_order() -> None:
+    class NoneTask:
+        name = "none"
+        required_tables = ("scalars",)
+        columns_by_table = {"scalars": None}
+
+    class ListTask:
+        name = "list"
+        required_tables = ("scalars",)
+        columns_by_table = {"scalars": ["TTOT"]}
+
+    assert hdf5_scan._merge_columns_by_table([NoneTask(), ListTask()]) == {"scalars": None}
+    assert hdf5_scan._merge_columns_by_table([ListTask(), NoneTask()]) == {"scalars": None}
+
+
+def test_merge_columns_by_table_unions_across_tasks() -> None:
+    class TaskA:
+        name = "a"
+        required_tables = ("singles",)
+        columns_by_table = {"singles": ["A"]}
+
+    class TaskB:
+        name = "b"
+        required_tables = ("singles",)
+        columns_by_table = {"singles": ["B"]}
+
+    result = hdf5_scan._merge_columns_by_table([TaskA(), TaskB()])
+
+    assert result == {"singles": ["A", "B"]}
 
 
 def test_ttot_sample_mask_matches_scalar_sample_check() -> None:

@@ -343,8 +343,10 @@ class CompactBinaryCountTask(FeatherMetaCacheMixin):
 
     Only ever needs raw ``Bin Name1``/``Bin Name2``/``Bin KW1``/``Bin KW2``/``TTOT``
     (plus ``TSCALE`` to derive ``Time[Myr]`` itself) -- none of ``read_file``'s
-    derived columns -- so this reads straight off the source HDF5 file
-    (``hdf5_reader_kind = "raw"``) instead of the lake-first/derived-column path.
+    derived columns -- so this reads via ``hdf5_reader_kind = "raw"``: lake-first
+    (a narrow projected reconstruction of just these columns from the particle
+    lake), falling back to parsing the source HDF5 file directly whenever this
+    file isn't in the lake yet.
     """
 
     schema_version = 1
