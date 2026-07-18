@@ -34,7 +34,6 @@ class PrimordialBinaryIdentifier(SimulationOnceAnalysisBase):
         *,
         update: bool = True,
         wait_age_hour: int | float | None = None,
-        use_hdf5_cache: bool | None = None,
         exclude_bad_dirname: bool = True,
         force: bool = False,
     ) -> pd.DataFrame:
@@ -46,7 +45,6 @@ class PrimordialBinaryIdentifier(SimulationOnceAnalysisBase):
             compute=lambda: self._compute_primordial_binaries(
                 simu_name,
                 wait_age_hour=wait_age_hour,
-                use_hdf5_cache=use_hdf5_cache,
                 exclude_bad_dirname=exclude_bad_dirname,
             ),
         )
@@ -56,16 +54,12 @@ class PrimordialBinaryIdentifier(SimulationOnceAnalysisBase):
         simu_name: str,
         *,
         wait_age_hour: int | float | None,
-        use_hdf5_cache: bool | None,
         exclude_bad_dirname: bool,
     ) -> tuple[pd.DataFrame, dict[str, Any]]:
         hdf5_config = getattr(self.config, "hdf5", {}) or {}
         file_selection = hdf5_config.get("file_selection", {})
-        table_cache = hdf5_config.get("table_cache", {})
         if wait_age_hour is None:
             wait_age_hour = file_selection.get("wait_age_hour", 24)
-        if use_hdf5_cache is None:
-            use_hdf5_cache = table_cache.get("use_hdf5_cache", True)
 
         first_hdf5_path = self._first_hdf5_path(
             simu_name,
@@ -73,12 +67,14 @@ class PrimordialBinaryIdentifier(SimulationOnceAnalysisBase):
             exclude_bad_dirname=exclude_bad_dirname,
         )
         source_mtime = os.path.getmtime(first_hdf5_path)
-        df_dict = self.hdf5_file_processor.read_tables(
+        # Only ever needs raw "Bin Name1"/"Bin Name2"/"TTOT" (see
+        # _identify_primordial_binaries below); read_raw_tables never touches the
+        # particle lake or applies read_file's derived columns/NS-BH clipping, and is
+        # cheap for a single file at simulation start.
+        df_dict = self.hdf5_file_processor.read_raw_tables(
             first_hdf5_path,
-            simu_name,
             tables=["scalars", "binaries"],
             columns_by_table={"scalars": ["TTOT"], "binaries": None},
-            use_cache=use_hdf5_cache,
         )
         binaries = df_dict.get("binaries", pd.DataFrame())
         scalars = df_dict.get("scalars", pd.DataFrame())

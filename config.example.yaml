@@ -66,15 +66,13 @@ processing:
   mem_max_gb: 40.0
   inode_limit: 2000000
 
-# Global HDF5 file selection, table-cache, and scan options (controls both
-# the main plotting flow and analyze/HDF5ScanTask-based analyses).
+# Global HDF5 file selection and scan options (controls both the main
+# plotting flow and analyze/HDF5ScanTask-based analyses).
 hdf5:
   file_selection:
     wait_age_hour: 24
     sample_every_nb_time: 1.0
     exclude_bad_dirname: true
-  table_cache:
-    use_hdf5_cache: true
   scan:
     parallel: true
     incremental_from_cache_tail: true
@@ -109,5 +107,4 @@ snapshot_summary:
 #   enabled: false
 #   scan:
 #     sample_every_nb_time: null   # collect every snapshot, not the 1.0 default
-#     use_hdf5_cache: false        # never write feather next to source/archive files
 #     checkpoint_every_files: 25

@@ -19,12 +19,10 @@ REMOVED_CONFIG_KEYS: Dict[Tuple[str, ...], str] = {
     ("processing", "plot_only_int_nbody_time"): "hdf5.file_selection.sample_every_nb_time",
     ("current_lagrangian", "sample_every_nb_time"): "hdf5.file_selection.sample_every_nb_time",
     ("current_lagrangian", "wait_age_hour"): "hdf5.file_selection.wait_age_hour",
-    ("current_lagrangian", "use_hdf5_cache"): "hdf5.table_cache.use_hdf5_cache",
     ("current_lagrangian", "parallel"): "hdf5.scan.parallel",
     ("current_lagrangian", "processes"): "processing.processes_count",
     ("galactic_orbit", "sample_every_nb_time"): "hdf5.file_selection.sample_every_nb_time",
     ("galactic_orbit", "wait_age_hour"): "hdf5.file_selection.wait_age_hour",
-    ("galactic_orbit", "use_hdf5_cache"): "hdf5.table_cache.use_hdf5_cache",
     ("galactic_orbit", "parallel"): "hdf5.scan.parallel",
     ("galactic_orbit", "processes"): "processing.processes_count",
     (
@@ -32,10 +30,6 @@ REMOVED_CONFIG_KEYS: Dict[Tuple[str, ...], str] = {
         "sample_every_nb_time",
     ): "hdf5.file_selection.sample_every_nb_time",
     ("binary_stellar_type_extraction", "wait_age_hour"): "hdf5.file_selection.wait_age_hour",
-    (
-        "binary_stellar_type_extraction",
-        "use_hdf5_cache",
-    ): "hdf5.table_cache.use_hdf5_cache",
     ("binary_stellar_type_extraction", "parallel"): "hdf5.scan.parallel",
     ("binary_stellar_type_extraction", "processes"): "processing.processes_count",
 }

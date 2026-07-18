@@ -6,7 +6,6 @@ import time
 import warnings
 from glob import glob
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -44,55 +43,338 @@ def _map_scalar_to_rows(
     return ttot_series.map(scalar_df_all[column])
 
 
+# ---------------------------------------------------------------------------
+# Lake-first raw-table reconstruction.
+#
+# The old L1 cache (``{hdf5_path}.{table}.df.feather``, existence-only
+# invalidated, see docs/analysis_architecture.md's retired Roadmap #1/#2) has
+# been retired in favor of the parquet particle lake
+# (``nbody_pipeline.analysis.particle_lake``): every raw column ``read_file``
+# needs for its derived-column block already lives in
+# snapshot_singles/binaries/mergers/scalars, keyed per source file by
+# ``source_hdf5_path``. These helpers reconstruct DataFrames with the *old
+# raw HDF5 column names* (``X1``, ``Bin Name1``, ``RDENS(1)``, ...) from the
+# lake, so that ``read_file``'s derived-column computation below runs
+# completely unchanged on top of them -- this is deliberate: it minimizes the
+# risk of a numeric regression versus re-deriving the same quantities with
+# new code. Density-center-corrected positions (``x_pc``/``cm_x_pc``/...) are
+# inverted back to raw N-body-unit coordinates using the same
+# RDENS-times-RBAR offset formula the lake used to compute them in the first
+# place (see ``nbody_pipeline.analysis.particle_lake._rdens_corrected_pc``),
+# so the round trip is exact in floating point (``(a - b) + b == a``).
+#
+# Force-derivative/integrator-state columns (``A1-3``, ``AD1-3``, ``D21-33``,
+# ``STEP``, ``STEPR``, ``T0``, ``T0R``, ``NB-Sph``, ``TEV``, ``TEV0``) are not
+# stored in the lake and are not reconstructed here: confirmed zero
+# consumers repo-wide (only ``particle_tracker.py`` used to pass them through
+# untouched), so this is an accepted, user-approved column drop rather than a
+# gap.
+_SCALARS_LAKE_TO_RAW: Dict[str, str] = {
+    "ttot": "TTOT",
+    "npairs": "NPAIRS",
+    "rbar_pc": "RBAR",
+    "zmbar_msun": "ZMBAR",
+    "n": "N",
+    "tstar_myr": "TSTAR",
+    "rdens_x_nb": "RDENS(1)",
+    "rdens_y_nb": "RDENS(2)",
+    "rdens_z_nb": "RDENS(3)",
+    "ttot_over_tcr0": "TTOT/TCR0",
+    "tscale_myr": "TSCALE",
+    "vstar_kms": "VSTAR",
+    "rc_nb": "RC",
+    "nc": "NC",
+    "vc_nb": "VC",
+    "rhom_nb": "RHOM",
+    "cmax": "CMAX",
+    "rscale_nb": "RSCALE",
+    "rsmin_nb": "RSMIN",
+    "dmin1_nb": "DMIN1",
+    "rg_x_pc": "RG(1)",
+    "rg_y_pc": "RG(2)",
+    "rg_z_pc": "RG(3)",
+    "vg_x_kmps": "VG(1)",
+    "vg_y_kmps": "VG(2)",
+    "vg_z_kmps": "VG(3)",
+    "tidal_1": "TIDAL(1)",
+    "tidal_2": "TIDAL(2)",
+    "tidal_3": "TIDAL(3)",
+    "tidal_4": "TIDAL(4)",
+    "gmg": "GMG",
+    "omega": "OMEGA",
+    "disk": "DISK",
+    "disk_a": "A",
+    "disk_b": "B",
+    "zmet": "ZMET",
+    **{f"zpars_{i}": f"ZPARS({i})" for i in range(1, 21)},
+    "etai": "ETAI",
+    "etar": "ETAR",
+    "etau": "ETAU",
+    "eclose_nb": "ECLOSE",
+    "dtmin_nb": "DTMIN",
+    "rmin_nb": "RMIN",
+    "gmin": "GMIN",
+    "gmax": "GMAX",
+    "smax": "SMAX",
+    "nnbopt": "NNBOPT",
+    "epoch0_myr": "EPOCH0",
+    "n_single": "N_SINGLE",
+    "n_binary": "N_BINARY",
+    "n_merger": "N_MERGER",
+}
+
+_SINGLES_LAKE_TO_RAW_DIRECT: Dict[str, str] = {
+    "object_id": "Name",
+    "kw": "KW",
+    "type_code": "Type",
+    "mass_msun": "M",
+    "vx_kms": "V1",
+    "vy_kms": "V2",
+    "vz_kms": "V3",
+    "pot_nb": "POT",
+    "radius_rsun": "R*",
+    "luminosity_lsun": "L*",
+    "teff_k": "Teff*",
+    "core_radius_rsun": "RC*",
+    "core_mass_msun": "MC*",
+    "spin_aspn": "ASPN",
+    "epoch_myr": "EPOCH",
+    "ttot": "TTOT",
+}
+
+_BINARIES_LAKE_TO_RAW_DIRECT: Dict[str, str] = {
+    "object_id_1": "Bin Name1",
+    "object_id_2": "Bin Name2",
+    "cm_id": "Bin cm Name",
+    "kw_1": "Bin KW1",
+    "kw_2": "Bin KW2",
+    "cm_kw": "Bin cm KW",
+    "bin_label": "Bin Label",
+    "mass_1_msun": "Bin M1*",
+    "mass_2_msun": "Bin M2*",
+    "cm_vx_kms": "Bin cm V1",
+    "cm_vy_kms": "Bin cm V2",
+    "cm_vz_kms": "Bin cm V3",
+    "rel_x_pc": "Bin rel X1",
+    "rel_y_pc": "Bin rel X2",
+    "rel_z_pc": "Bin rel X3",
+    "rel_vx_kms": "Bin rel V1",
+    "rel_vy_kms": "Bin rel V2",
+    "rel_vz_kms": "Bin rel V3",
+    "cm_pot_nb": "Bin POT",
+    "semi_major_axis_au": "Bin A[au]",
+    "eccentricity": "Bin ECC",
+    "period_days": "Bin P[d]",
+    "pert_gamma": "Bin G",
+    "radius_1_rsun": "Bin RS1*",
+    "radius_2_rsun": "Bin RS2*",
+    "luminosity_1_lsun": "Bin L1*",
+    "luminosity_2_lsun": "Bin L2*",
+    "teff_1_k": "Bin Teff1*",
+    "teff_2_k": "Bin Teff2*",
+    "core_radius_1_rsun": "Bin RC1*",
+    "core_radius_2_rsun": "Bin RC2*",
+    "core_mass_1_msun": "Bin MC1*",
+    "core_mass_2_msun": "Bin MC2*",
+    "spin_aspn_1": "ASPN1",
+    "spin_aspn_2": "ASPN2",
+    "epoch_1_myr": "EPOCH1",
+    "epoch_2_myr": "EPOCH2",
+    "ttot": "TTOT",
+}
+
+_MERGERS_LAKE_TO_RAW_DIRECT: Dict[str, str] = {
+    "object_id_1": "Mer NAM1",
+    "object_id_2": "Mer NAM2",
+    "object_id_3": "Mer NAM3",
+    "cm_id": "Mer NAMC",
+    "kw_1": "Mer KW1",
+    "kw_2": "Mer KW2",
+    "kw_3": "Mer KW3",
+    "cm_kw": "Mer KWC",
+    "mass_1_msun": "Mer M1",
+    "mass_2_msun": "Mer M2",
+    "mass_3_msun": "Mer M3",
+    "cm_vx_kms": "Mer VC1",
+    "cm_vy_kms": "Mer VC2",
+    "cm_vz_kms": "Mer VC3",
+    "rel0_x_pc": "Mer XR01",
+    "rel0_y_pc": "Mer XR02",
+    "rel0_z_pc": "Mer XR03",
+    "rel0_vx_kms": "Mer VR01",
+    "rel0_vy_kms": "Mer VR02",
+    "rel0_vz_kms": "Mer VR03",
+    "rel1_x_pc": "Mer XR11",
+    "rel1_y_pc": "Mer XR12",
+    "rel1_z_pc": "Mer XR13",
+    "rel1_vx_kms": "Mer VR11",
+    "rel1_vy_kms": "Mer VR12",
+    "rel1_vz_kms": "Mer VR13",
+    "cm_pot_nb": "Mer POT",
+    "radius_1_rsun": "Mer RS1",
+    "radius_2_rsun": "Mer RS2",
+    "radius_3_rsun": "Mer RS3",
+    "luminosity_1_lsun": "Mer L1",
+    "luminosity_2_lsun": "Mer L2",
+    "luminosity_3_lsun": "Mer L3",
+    "teff_1_k": "Mer TE1",
+    "teff_2_k": "Mer TE2",
+    "teff_3_k": "Mer TE3",
+    "core_radius_1_rsun": "Mer RC1",
+    "core_radius_2_rsun": "Mer RC2",
+    "core_radius_3_rsun": "Mer RC3",
+    "core_mass_1_msun": "Mer MC1",
+    "core_mass_2_msun": "Mer MC2",
+    "core_mass_3_msun": "Mer MC3",
+    "semi_major_axis_0_au": "Mer A0[au]",
+    "eccentricity_0": "Mer ECC0",
+    "period_0_days": "Mer P0[d]",
+    "semi_major_axis_1_au": "Mer A1[au]",
+    "eccentricity_1": "Mer ECC1",
+    "period_1_days": "Mer P1[d]",
+    "ttot": "TTOT",
+}
+
+
+def _scalars_raw_from_lake(lake_scalars: pd.DataFrame) -> pd.DataFrame:
+    """Rebuild the raw ``scalars`` table (indexed by TTOT) from a lake slice."""
+    raw = lake_scalars.rename(columns=_SCALARS_LAKE_TO_RAW)
+    raw = raw[list(_SCALARS_LAKE_TO_RAW.values())]
+    return raw.set_index("TTOT", drop=False)
+
+
+def _rdens_pc_from_raw_scalars(raw_scalars: pd.DataFrame) -> pd.DataFrame:
+    """(TTOT -> RDENS*RBAR in pc), same formula as ``read_file``'s own offsets."""
+    from nbody_pipeline.io.text_parsers import get_scale_dict_from_hdf5_df
+
+    scale = get_scale_dict_from_hdf5_df(raw_scalars)
+    return raw_scalars[["RDENS(1)", "RDENS(2)", "RDENS(3)"]] * scale["r"]
+
+
+def _invert_rdens_offset(
+    pc_values: pd.Series, ttot: pd.Series, rdens_pc_column: pd.Series
+) -> pd.Series:
+    """raw_nb = pc_value + offset(ttot); exact inverse of the lake's forward correction."""
+    offsets = ttot.map(rdens_pc_column)
+    return pc_values.astype("float64") + offsets.to_numpy(dtype="float64")
+
+
+_SINGLES_RAW_COLUMNS = [*_SINGLES_LAKE_TO_RAW_DIRECT.values(), "X1", "X2", "X3"]
+_BINARIES_RAW_COLUMNS = [
+    *_BINARIES_LAKE_TO_RAW_DIRECT.values(),
+    "Bin cm X1",
+    "Bin cm X2",
+    "Bin cm X3",
+]
+_MERGERS_RAW_COLUMNS = [*_MERGERS_LAKE_TO_RAW_DIRECT.values(), "Mer XC1", "Mer XC2", "Mer XC3"]
+
+
+def _singles_raw_from_lake(lake_singles: pd.DataFrame, rdens_pc: pd.DataFrame) -> pd.DataFrame:
+    if lake_singles.empty:
+        return pd.DataFrame(columns=_SINGLES_RAW_COLUMNS)
+    raw = lake_singles.rename(columns=_SINGLES_LAKE_TO_RAW_DIRECT)
+    ttot = lake_singles["ttot"]
+    raw["X1"] = _invert_rdens_offset(lake_singles["x_pc"], ttot, rdens_pc["RDENS(1)"])
+    raw["X2"] = _invert_rdens_offset(lake_singles["y_pc"], ttot, rdens_pc["RDENS(2)"])
+    raw["X3"] = _invert_rdens_offset(lake_singles["z_pc"], ttot, rdens_pc["RDENS(3)"])
+    return raw[_SINGLES_RAW_COLUMNS].reset_index(drop=True)
+
+
+def _binaries_raw_from_lake(lake_binaries: pd.DataFrame, rdens_pc: pd.DataFrame) -> pd.DataFrame:
+    if lake_binaries.empty:
+        return pd.DataFrame(columns=_BINARIES_RAW_COLUMNS)
+    raw = lake_binaries.rename(columns=_BINARIES_LAKE_TO_RAW_DIRECT)
+    ttot = lake_binaries["ttot"]
+    raw["Bin cm X1"] = _invert_rdens_offset(lake_binaries["cm_x_pc"], ttot, rdens_pc["RDENS(1)"])
+    raw["Bin cm X2"] = _invert_rdens_offset(lake_binaries["cm_y_pc"], ttot, rdens_pc["RDENS(2)"])
+    raw["Bin cm X3"] = _invert_rdens_offset(lake_binaries["cm_z_pc"], ttot, rdens_pc["RDENS(3)"])
+    return raw[_BINARIES_RAW_COLUMNS].reset_index(drop=True)
+
+
+def _mergers_raw_from_lake(lake_mergers: pd.DataFrame, rdens_pc: pd.DataFrame) -> pd.DataFrame:
+    if lake_mergers.empty:
+        return pd.DataFrame(columns=_MERGERS_RAW_COLUMNS)
+    raw = lake_mergers.rename(columns=_MERGERS_LAKE_TO_RAW_DIRECT)
+    ttot = lake_mergers["ttot"]
+    raw["Mer XC1"] = _invert_rdens_offset(lake_mergers["cm_x_pc"], ttot, rdens_pc["RDENS(1)"])
+    raw["Mer XC2"] = _invert_rdens_offset(lake_mergers["cm_y_pc"], ttot, rdens_pc["RDENS(2)"])
+    raw["Mer XC3"] = _invert_rdens_offset(lake_mergers["cm_z_pc"], ttot, rdens_pc["RDENS(3)"])
+    return raw[_MERGERS_RAW_COLUMNS].reset_index(drop=True)
+
+
+def _raw_tables_from_lake(
+    config_manager: Any, simu_name: Optional[str], hdf5_path: str
+) -> Optional[Dict[str, pd.DataFrame]]:
+    """Reconstruct raw scalars/singles/binaries/mergers tables from the parquet lake.
+
+    Returns ``None`` (caller should fall back to parsing the HDF5 file
+    directly) if this simulation has no lake built yet, or if this specific
+    ``hdf5_path`` has no rows in ``snapshot_scalars`` (not scanned into the
+    lake yet, or every one of its TTOT lost the cross-file dedup tie-break --
+    see ``nbody_pipeline.analysis.particle_lake.compute_ttot_dedup_exclusions``).
+    A file that *is* represented in the lake but legitimately has zero
+    binaries/mergers at every one of its snapshots still returns normally
+    (with an empty binaries/mergers table), since only ``scalars`` is
+    guaranteed non-empty for a scanned file.
+    """
+    if simu_name is None:
+        return None
+
+    from nbody_pipeline.query import load_feature
+    from nbody_pipeline.analysis.cache_paths import (
+        AnalysisCacheFeature,
+        SNAPSHOT_BINARIES_FEATURE,
+        SNAPSHOT_MERGERS_FEATURE,
+        SNAPSHOT_SCALARS_FEATURE,
+        SNAPSHOT_SINGLES_FEATURE,
+    )
+
+    try:
+        lake_scalars = load_feature(
+            config_manager,
+            simu_name,
+            SNAPSHOT_SCALARS_FEATURE,
+            where="source_hdf5_path = ?",
+            params=[hdf5_path],
+        )
+    except (FileNotFoundError, AttributeError, KeyError, TypeError):
+        # No lake for this simulation: no Parquet on disk yet (FileNotFoundError), or
+        # config_manager doesn't even define a cache-dir mapping / this simu_name isn't
+        # in it (AttributeError/KeyError from analysis_cache_dir -- routine for
+        # lightweight test doubles and callers that never touch the lake). Any of these
+        # just means "fall back to parsing the HDF5 file directly", never a hard error.
+        return None
+    if lake_scalars.empty:
+        return None
+
+    raw_scalars = _scalars_raw_from_lake(lake_scalars)
+    rdens_pc = _rdens_pc_from_raw_scalars(raw_scalars)
+
+    def _load(feature: AnalysisCacheFeature) -> pd.DataFrame:
+        try:
+            return load_feature(
+                config_manager, simu_name, feature, where="source_hdf5_path = ?", params=[hdf5_path]
+            )
+        except FileNotFoundError:
+            return pd.DataFrame()
+
+    lake_singles = _load(SNAPSHOT_SINGLES_FEATURE)
+    lake_binaries = _load(SNAPSHOT_BINARIES_FEATURE)
+    lake_mergers = _load(SNAPSHOT_MERGERS_FEATURE)
+
+    return {
+        "scalars": raw_scalars,
+        "singles": _singles_raw_from_lake(lake_singles, rdens_pc),
+        "binaries": _binaries_raw_from_lake(lake_binaries, rdens_pc),
+        "mergers": _mergers_raw_from_lake(lake_mergers, rdens_pc),
+    }
+
+
 class HDF5FileProcessor:
     """Read and preprocess HDF5 data for plotting"""
 
     def __init__(self, config_manager):
         self.config = config_manager
-
-    def _get_feather_path_of(self, hdf5_path: str) -> Dict[str, str]:
-        return {
-            "scalars": f"{hdf5_path}.scalars.df.feather",
-            "singles": f"{hdf5_path}.singles.df.feather",
-            "binaries": f"{hdf5_path}.binaries.df.feather",
-            "mergers": f"{hdf5_path}.mergers.df.feather",
-        }
-
-    def _cache_is_complete(self, feather_path_of: Dict[str, str]) -> bool:
-        return all(Path(p).is_file() for p in feather_path_of.values())
-
-    def _binaries_cache_is_current(self, feather_path: str) -> bool:
-        """Whether a binaries feather cache already has the ``binary_class`` column.
-
-        The L1 feather cache has no version marker, so this is a lazy schema
-        check: read just ``binary_class`` (cheap even for a large table) --
-        success means current. On failure (missing/old-schema cache), fall
-        back to a full read: an empty table (old zero-row placeholder cache,
-        see ``_write_df_dict_to_cache``) has nothing stale to worry about and
-        counts as current; a non-empty table without ``binary_class`` is stale.
-        """
-        try:
-            pd.read_feather(feather_path, columns=["binary_class"])
-            return True
-        except Exception:
-            pass
-        try:
-            full = pd.read_feather(feather_path)
-        except Exception:
-            return False
-        return full.empty
-
-    def _read_df_dict_from_cache(self, feather_path_of: Dict[str, str]) -> Dict[str, pd.DataFrame]:
-        df_dict = {
-            "scalars": pd.read_feather(feather_path_of["scalars"]),
-            "singles": pd.read_feather(feather_path_of["singles"]),
-            "binaries": pd.read_feather(feather_path_of["binaries"]),
-            "mergers": pd.read_feather(feather_path_of["mergers"]),
-        }
-        if "TTOT" not in df_dict["scalars"].columns:
-            raise ValueError("[cache] scalars feather missing column 'TTOT'; cannot set index.")
-        df_dict["scalars"] = df_dict["scalars"].set_index("TTOT", drop=False)
-        return df_dict
 
     def read_tables(
         self,
@@ -100,55 +382,26 @@ class HDF5FileProcessor:
         simu_name: Optional[str],
         tables: Sequence[str],
         columns_by_table: Optional[Mapping[str, Sequence[str] | None]] = None,
-        use_cache: bool = True,
     ) -> Dict[str, pd.DataFrame]:
-        """Read selected processed HDF5 tables, preferring existing feather caches.
+        """Read selected processed HDF5 tables (thin subset of ``read_file``).
 
-        If any requested feather cache is missing or does not contain requested columns, this
-        falls back to ``read_file(..., write_cache=False)`` and returns the requested tables.
+        ``read_file`` already resolves its raw tables lake-first (falling
+        back to parsing the HDF5 file only when this file isn't in the lake
+        yet), so this is just a pass-through: run ``read_file`` once, then
+        project down to the requested tables/columns from the in-memory
+        result.
         """
         columns_by_table = columns_by_table or {}
         requested_tables = list(dict.fromkeys(tables))
-        feather_path_of = self._get_feather_path_of(hdf5_path)
-        if use_cache:
-            try:
-                df_dict = {}
-                for table in requested_tables:
-                    feather_path = feather_path_of[table]
-                    if not Path(feather_path).is_file():
-                        raise FileNotFoundError(feather_path)
-                    if table == "binaries" and not self._binaries_cache_is_current(feather_path):
-                        # 列投影读取可能只取旧 Ebind/kT 而永远碰不到 binary_class，
-                        # 所以无论 columns_by_table 是否请求它都要独立探测。
-                        raise ValueError(
-                            f"[cache] stale binaries feather (missing binary_class): {feather_path}"
-                        )
-                    columns = columns_by_table.get(table)
-                    if columns is None:
-                        df = pd.read_feather(feather_path)
-                    else:
-                        df = pd.read_feather(feather_path, columns=list(columns))
-                    if table == "scalars":
-                        if "TTOT" not in df.columns:
-                            raise ValueError("[cache] scalars feather missing column 'TTOT'.")
-                        df = df.set_index("TTOT", drop=False)
-                    df_dict[table] = df
-                logger.info(
-                    "[hdf5-dataframe-cache] Loaded selected feather tables %s for %s",
-                    requested_tables,
-                    hdf5_path,
-                )
-                return df_dict
-            except (FileNotFoundError, KeyError, ValueError, TypeError, OSError):
-                pass
-
-        full_df_dict = self.read_file(
-            hdf5_path,
-            simu_name,
-            use_cache=use_cache,
-            write_cache=False,
-        )
-        return {table: full_df_dict.get(table, pd.DataFrame()) for table in requested_tables}
+        full_df_dict = self.read_file(hdf5_path, simu_name)
+        result: Dict[str, pd.DataFrame] = {}
+        for table in requested_tables:
+            df = full_df_dict.get(table, pd.DataFrame())
+            columns = columns_by_table.get(table)
+            if columns is not None and not df.empty:
+                df = df[[col for col in columns if col in df.columns]]
+            result[table] = df
+        return result
 
     def read_raw_tables(
         self,
@@ -158,13 +411,11 @@ class HDF5FileProcessor:
     ) -> Dict[str, pd.DataFrame]:
         """Read selected raw HDF5 tables with h5py-level column projection.
 
-        Thin wrapper around ``raw_dataframes_from_hdf5_file``: never reads or
-        writes the L1 feather cache (``{path}.{table}.df.feather``), and
-        applies none of ``read_file``'s derived columns or NS/BH display
+        Thin wrapper around ``raw_dataframes_from_hdf5_file``: never touches
+        the particle lake or ``read_file``'s derived columns/NS-BH display
         clipping. For scan tasks that declare ``hdf5_reader_kind = "raw"``
         (see ``nbody_pipeline.analysis.particle_lake``), which need the
-        original source values and cannot afford writing feather next to
-        multi-terabyte source/archive directories.
+        original source values.
         """
         from nbody_pipeline.io.text_parsers import raw_dataframes_from_hdf5_file
 
@@ -185,30 +436,12 @@ class HDF5FileProcessor:
 
         return read_step_times(hdf5_path)
 
-    def _write_df_dict_to_cache(
-        self, df_dict: Dict[str, pd.DataFrame], feather_path_of: Dict[str, str]
-    ) -> None:
-        for key, path in feather_path_of.items():
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-            df = df_dict.get(key)
-            if df is None:
-                pd.DataFrame().to_feather(path)
-                continue
-
-            if key == "scalars" and "TTOT" not in df.columns:
-                df = df.copy()
-                df["TTOT"] = df.index.to_numpy()
-
-            df.to_feather(path)
-
     @log_time(logger)
     def read_file(
         self,
         hdf5_path: str,
         simu_name: Optional[str] = None,
         N0: Optional[int] = None,
-        use_cache: bool = False,
-        write_cache: bool = True,
     ) -> Dict[str, pd.DataFrame]:
         """
         Load and preprocess HDF5 data. Extract multiple DataFrames from a single HDF5 file containing snapshots at multiple times.
@@ -216,12 +449,19 @@ class HDF5FileProcessor:
         Note: One HDF5 file (.h5part) contains MULTIPLE snapshots (typically 8) at different time points.
         Each snapshot represents the simulation state at one specific TTOT value.
 
+        Raw scalars/singles/binaries/mergers are sourced from the parquet
+        particle lake when this file has already been scanned into it (see
+        ``nbody_pipeline.analysis.particle_lake``), falling back to parsing
+        the HDF5 file directly (``nbody_pipeline.io.text_parsers.dataframes_from_hdf5_file``)
+        otherwise -- never writing any cache in either case. The derived-column
+        computation below is unchanged either way.
+
         Args:
             hdf5_path: Path to HDF5 file
-            simu_name: Used to get initial condition file path and read N0
+            simu_name: Used to get initial condition file path and read N0, and to
+                       look up this file's lake data (a lake lookup is skipped
+                       entirely when simu_name is None).
             N0: Initial particle count (required if simu_name is None)
-            use_cache: Read from Feather cache if it exists.
-            write_cache: Create Feather cache after reading HDF5 when use_cache is True.
 
         Returns:
             df_dict: Dictionary containing 'scalars', 'singles', 'binaries', 'mergers'
@@ -243,9 +483,8 @@ class HDF5FileProcessor:
             dtype='object')
 
             Columns of df_dict['singles']:
-            Index(['X1', 'X2', 'X3', 'V1', 'V2', 'V3', 'A1', 'A2', 'A3', 'AD1', 'AD2',
-                'AD3', 'D21', 'D22', 'D23', 'D31', 'D32', 'D33', 'STEP', 'STEPR', 'T0',
-                'T0R', 'M', 'NB-Sph', 'POT', 'R*', 'L*', 'Teff*', 'RC*', 'MC*', 'KW',
+            Index(['X1', 'X2', 'X3', 'V1', 'V2', 'V3', 'M',
+                'POT', 'R*', 'L*', 'Teff*', 'RC*', 'MC*', 'KW',
                 'Name', 'Type', 'ASPN', 'TEV', 'TEV0', 'EPOCH', 'TTOT', 'TTOT/TCR0',
                 'TTOT/TRH0', 'Time[Myr]', 'X [pc]', 'Y [pc]', 'Z [pc]',
                 'Distance_to_cluster_center[pc]', 'mod_velocity[kmps]', 'Stellar Type'],
@@ -253,14 +492,9 @@ class HDF5FileProcessor:
 
             Columns of df_dict['binaries']:
             Index(['Bin cm X1', 'Bin cm X2', 'Bin cm X3', 'Bin cm V1', 'Bin cm V2',
-                'Bin cm V3', 'Bin cm A1', 'Bin cm A2', 'Bin cm A3', 'Bin cm AD1',
-                'Bin cm AD2', 'Bin cm AD3', 'Bin cm D21', 'Bin cm D22', 'Bin cm D23',
-                'Bin cm D31', 'Bin cm D32', 'Bin cm D33', 'Bin cm STEP', 'Bin cm STEPR',
-                'Bin cm T0', 'Bin cm T0R', 'Bin M1*', 'Bin M2*', 'Bin rel X1',
+                'Bin cm V3', 'Bin M1*', 'Bin M2*', 'Bin rel X1',
                 'Bin rel X2', 'Bin rel X3', 'Bin rel V1', 'Bin rel V2', 'Bin rel V3',
-                'Bin rel A1', 'Bin rel A2', 'Bin rel A3', 'Bin rel AD1', 'Bin rel AD2',
-                'Bin rel AD3', 'Bin rel D21', 'Bin rel D22', 'Bin rel D23',
-                'Bin rel D31', 'Bin rel D32', 'Bin rel D33', 'Bin POT', 'Bin RS1*',
+                'Bin POT', 'Bin RS1*',
                 'Bin L1*', 'Bin Teff1*', 'Bin RS2*', 'Bin L2*', 'Bin Teff2*',
                 'Bin RC1*', 'Bin MC1*', 'Bin RC2*', 'Bin MC2*', 'Bin A[au]', 'Bin ECC',
                 'Bin P[d]', 'Bin G', 'Bin KW1', 'Bin KW2', 'Bin cm KW', 'Bin Name1',
@@ -284,6 +518,12 @@ class HDF5FileProcessor:
             ``nbody_pipeline.analysis.physics.classify_binaries``); and
             ``is_hard_binary`` is redefined as ``binary_class == "hard"`` (same
             column name, new semantics -- see CHANGELOG).
+
+            Note (2026-07 L1 feather-cache retirement): force-derivative/integrator
+            columns (``A1-3``, ``AD1-3``, ``D21-33``, ``STEP``, ``STEPR``, ``T0``,
+            ``T0R``, ``TEV``, ``TEV0``, and their ``Bin``/``Bin cm``/``Bin rel``
+            equivalents) are no longer present -- confirmed zero consumers
+            repo-wide; see ``_raw_tables_from_lake``.
         """
         from nbody_pipeline.io.text_parsers import (
             get_valueStr_of_namelist_key,
@@ -294,21 +534,11 @@ class HDF5FileProcessor:
 
         logger.debug(f"\nProcessing {hdf5_path=}...")
 
-        feather_path_of = self._get_feather_path_of(hdf5_path)
-        if (
-            use_cache
-            and self._cache_is_complete(feather_path_of)
-            and self._binaries_cache_is_current(feather_path_of["binaries"])
-        ):
-            try:
-                df_dict = self._read_df_dict_from_cache(feather_path_of)
-                logger.info(f"[hdf5-dataframe-cache] Loaded feather cache for {hdf5_path}")
-                return df_dict
-            except Exception:
-                pass
-
-        # 获取数据框
-        df_dict = dataframes_from_hdf5_file(hdf5_path)
+        df_dict = _raw_tables_from_lake(self.config, simu_name, hdf5_path)
+        if df_dict is not None:
+            logger.info("[hdf5-lake] Sourced raw tables from the particle lake for %s", hdf5_path)
+        else:
+            df_dict = dataframes_from_hdf5_file(hdf5_path)
         if N0 is None:
             N0 = int(
                 get_valueStr_of_namelist_key(
@@ -504,15 +734,6 @@ class HDF5FileProcessor:
             merger_df_all["TTOT/TCR0"] = merger_df_all["TTOT"].map(scalar_df_all["TTOT/TCR0"])
             merger_df_all["TTOT/TRH0"] = merger_df_all["TTOT/TCR0"] / (0.1 * N0 / np.log(0.4 * N0))
             merger_df_all["Time[Myr]"] = merger_df_all["TTOT"] * scale_dict["t"]
-
-        if use_cache and write_cache:
-            try:
-                self._write_df_dict_to_cache(df_dict, feather_path_of)
-                logger.info(f"[hdf5-dataframe-cache] Wrote feather cache for {hdf5_path}")
-            except Exception as e:
-                logger.warning(
-                    f"[hdf5-dataframe-cache] Failed to write feather cache for {hdf5_path}. err={e!r}"
-                )
 
         return df_dict
 

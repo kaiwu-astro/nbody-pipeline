@@ -146,63 +146,6 @@ class CompactBinaryCounter(ScanBackedAnalysisBase):
         )
         return {"summary": summary, "details": details}
 
-    def _read_counting_tables(
-        self, hdf5_path: str, simu_name: str, use_hdf5_cache: bool
-    ) -> Dict[str, pd.DataFrame]:
-        if not use_hdf5_cache:
-            return self.hdf5_file_processor.read_file(
-                hdf5_path,
-                simu_name,
-                use_cache=False,
-            )
-
-        binary_columns = [
-            "Bin Name1",
-            "Bin Name2",
-            "Bin KW1",
-            "Bin KW2",
-            "TTOT",
-            "Time[Myr]",
-            "Stellar Type",
-        ]
-        return self.hdf5_file_processor.read_tables(
-            hdf5_path,
-            simu_name,
-            tables=["scalars", "binaries"],
-            columns_by_table={"scalars": ["TTOT", "Time[Myr]"], "binaries": binary_columns},
-            use_cache=True,
-        )
-
-    def _read_counting_tables_from_cache(self, hdf5_path: str) -> Dict[str, pd.DataFrame] | None:
-        feather_path_of = self.hdf5_file_processor._get_feather_path_of(hdf5_path)
-        scalars_path = feather_path_of["scalars"]
-        binaries_path = feather_path_of["binaries"]
-        if not pd.io.common.file_exists(scalars_path) or not pd.io.common.file_exists(
-            binaries_path
-        ):
-            return None
-
-        scalars = pd.read_feather(scalars_path, columns=["TTOT", "Time[Myr]"])
-        binary_columns = [
-            "Bin Name1",
-            "Bin Name2",
-            "Bin KW1",
-            "Bin KW2",
-            "TTOT",
-            "Time[Myr]",
-            "Stellar Type",
-        ]
-        try:
-            binaries = pd.read_feather(binaries_path, columns=binary_columns)
-        except (KeyError, ValueError, TypeError):
-            binaries = pd.read_feather(binaries_path, columns=binary_columns[:-1])
-        if "TTOT" not in scalars.columns:
-            logger.warning("[cache] scalars feather missing column 'TTOT' for %s", hdf5_path)
-            return None
-        scalars = scalars.set_index("TTOT", drop=False)
-        logger.info("[cache] Loaded compact-binary counting cache for %s", hdf5_path)
-        return {"scalars": scalars, "binaries": binaries}
-
     def _binary_snapshot_from_tables(
         self, df_dict: Dict[str, pd.DataFrame], ttot: float
     ) -> pd.DataFrame:
@@ -396,20 +339,25 @@ class CompactBinaryCounter(ScanBackedAnalysisBase):
 
 
 class CompactBinaryCountTask(FeatherMetaCacheMixin):
-    """Scan task storing compact-binary category hits per snapshot."""
+    """Scan task storing compact-binary category hits per snapshot.
+
+    Only ever needs raw ``Bin Name1``/``Bin Name2``/``Bin KW1``/``Bin KW2``/``TTOT``
+    (plus ``TSCALE`` to derive ``Time[Myr]`` itself) -- none of ``read_file``'s
+    derived columns -- so this reads straight off the source HDF5 file
+    (``hdf5_reader_kind = "raw"``) instead of the lake-first/derived-column path.
+    """
 
     schema_version = 1
+    hdf5_reader_kind = "raw"
     required_tables: Sequence[str] = ("scalars", "binaries")
     columns_by_table: Mapping[str, Sequence[str] | None] = {
-        "scalars": ["TTOT", "Time[Myr]"],
+        "scalars": ["TTOT", "TSCALE"],
         "binaries": [
             "Bin Name1",
             "Bin Name2",
             "Bin KW1",
             "Bin KW2",
             "TTOT",
-            "Time[Myr]",
-            "Stellar Type",
         ],
     }
 
@@ -499,31 +447,22 @@ class CompactBinaryCountTask(FeatherMetaCacheMixin):
     def _file_meta(self, hdf5_path: str, df_dict: Mapping[str, pd.DataFrame]) -> Dict[str, Any]:
         file_meta = default_file_meta(hdf5_path, df_dict)
         scalars = df_dict.get("scalars", pd.DataFrame())
-        if "Time[Myr]" in scalars.columns:
+        if "TSCALE" in scalars.columns and "TTOT" in scalars.columns:
             file_meta["time_myr"] = [
-                float(time_myr) for time_myr in scalars["Time[Myr]"].dropna().tolist()
+                float(ttot) * float(tscale)
+                for ttot, tscale in zip(scalars["TTOT"], scalars["TSCALE"])
+                if pd.notna(ttot) and pd.notna(tscale)
             ]
         else:
             file_meta["time_myr"] = []
         return file_meta
 
     def _row_time_myr(self, row: pd.Series, df_dict: Mapping[str, pd.DataFrame]) -> float:
-        if "Time[Myr]" in row and pd.notna(row["Time[Myr]"]):
-            return float(row["Time[Myr]"])
-
         scalars = df_dict.get("scalars", pd.DataFrame())
-        if "Time[Myr]" not in scalars.columns:
+        if "TSCALE" not in scalars.columns or "TTOT" not in scalars.columns:
             return np.nan
         ttot = float(row["TTOT"])
-        try:
-            scalar_row = scalars.loc[ttot]
-        except KeyError:
-            if "TTOT" not in scalars.columns:
-                return np.nan
-            scalar_rows = scalars[scalars["TTOT"].astype(float) == ttot]
-            if scalar_rows.empty:
-                return np.nan
-            scalar_row = scalar_rows.iloc[0]
-        if isinstance(scalar_row, pd.DataFrame):
-            scalar_row = scalar_row.iloc[0]
-        return float(scalar_row["Time[Myr]"])
+        scalar_rows = scalars[scalars["TTOT"].astype(float) == ttot]
+        if scalar_rows.empty:
+            return np.nan
+        return ttot * float(scalar_rows.iloc[0]["TSCALE"])

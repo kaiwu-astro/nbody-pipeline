@@ -47,8 +47,8 @@ nbody_pipeline/
 │   ├── manager.py       # ConfigManager 类，管理所有配置项
 │   └── default_config.yaml  # 默认配置文件（包含路径、物理常数、绘图限制等）
 ├── io/              # 数据输入输出模块
-│   ├── hdf5_processor.py    # HDF5FileProcessor，读取 .h5part 文件
-│   ├── lagr_processor.py    # LagrFileProcessor，读取 Lagrangian 半径文件
+│   ├── hdf5_reader.py       # HDF5FileProcessor，读取 .h5part 文件
+│   ├── lagr_reader.py       # LagrFileProcessor，读取 Lagrangian 半径文件
 │   └── text_parsers.py      # 文本文件解析函数
 ├── analysis/        # 数据分析模块
 │   ├── particle_tracker.py  # ParticleTracker，跟踪粒子演化
@@ -368,14 +368,18 @@ analysis/data-reduction 产生的中间结果缓存统一放在 `paths.analysis_
 `paths.lake_dir`（可选，第二存储根，`config.lake_dir_of[simu_name] == <lake_dir>/<simu_name>`）时把它们
 路由到那里，未配置时回落到 `analysis_cache_dir`（向后兼容）。这四张表覆盖每个 snapshot 的全部
 singles/binaries/mergers/scalars 原始列（体量远大于 `compact_object_history`），走
-`hdf5_reader_kind = "raw"`（`HDF5FileProcessor.read_raw_tables`）读取，绝不写 L1 feather、不套用
-`read_file` 的 NS/BH 展示裁剪。构建方式：`python -m nbody_pipeline analyze --features lake`；nightly
+`hdf5_reader_kind = "raw"`（`HDF5FileProcessor.read_raw_tables`）读取，绕过 `read_file` 的全部派生列
+（含 NS/BH 展示裁剪）。构建方式：`python -m nbody_pipeline analyze --features lake`；nightly
 `update_analysis_store` **不**自动构建它（体量原因）。全量重建前先跑
 `scripts/lake_preflight.py` 排查跨 run 目录的重复/重叠 TTOT。详见
 `docs/analysis_architecture.md` Roadmap #5。
 
-**HDF5 I/O 加速缓存：**
-`.h5part.*.df.feather` 这类从 HDF5 table 派生的 Feather 缓存属于文件读取加速缓存，应继续放在对应 `.h5part` 文件旁边，不纳入 `analysis_cache_dir`。
+**HDF5 I/O 加速缓存（已于 2026-07 移除）：**
+`.h5part.*.df.feather`（挨着源 `.h5part` 文件写的 L1 缓存）已完全移除。`read_file` 现在优先从
+particle lake（上面的 `snapshot_singles`/`snapshot_binaries`/`snapshot_scalars`，若该文件已建湖）
+反推出旧的原始 HDF5 列名/数值来跑派生列计算，未建湖时回退直接解析 HDF5，两条路径都不再写任何缓存。
+详见 `docs/analysis_architecture.md` 的 L1 retirement 说明与
+`nbody_pipeline.io.hdf5_reader._raw_tables_from_lake`。
 
 **典型 Feather 缓存模式：**
 使用 Apache Arrow Feather 格式缓存 DataFrame，速度快且保留类型信息。保存 analysis 结果时，先通过缓存路径 helper 得到 feature 目录：
@@ -468,9 +472,9 @@ class DataProcessor:
 
 新增持久化 L2 表（feature store）必须使用 VO 安全命名（`snake_case` + 单位后缀，如 `mass_msun`）并在 `nbody_pipeline/schemas/` 下提供 schema YAML；已有内部列名（如 `X [pc]`）保持不变。
 
-所有 HDF5 文件选择、table cache、scan 并行和时间采样配置集中在全局 `hdf5` 配置节。feature 配置（如 `current_lagrangian`、`galactic_orbit`、`binary_stellar_type_extraction`）只保留 `enabled`、缓存文件名和绘图参数等专属字段。`hdf5.file_selection.sample_every_nb_time` 同时控制 scan 和主 HDF5 绘图；`None` 或 `<= 0` 表示不采样，正数表示保留从 `0.0` 开始落在该 NB 时间间隔倍数上的 snapshot。
+所有 HDF5 文件选择、scan 并行和时间采样配置集中在全局 `hdf5` 配置节（`table_cache`/`use_hdf5_cache` 已随 L1 feather 缓存一起于 2026-07 移除）。feature 配置（如 `current_lagrangian`、`galactic_orbit`、`binary_stellar_type_extraction`）只保留 `enabled`、缓存文件名和绘图参数等专属字段。`hdf5.file_selection.sample_every_nb_time` 同时控制 scan 和主 HDF5 绘图；`None` 或 `<= 0` 表示不采样，正数表示保留从 `0.0` 开始落在该 NB 时间间隔倍数上的 snapshot。
 
-需要少量覆盖全局 `hdf5` 配置（而非另起一套并行字段）的 feature，可在自己的配置节下加一个 `scan:` 子节，经 `hdf5_scan_options_from_config(config, overrides=...)` 用 `dataclasses.replace` 叠加到全局默认值上（参见 `particle_lake.scan`：只覆盖 `sample_every_nb_time`/`use_hdf5_cache`/`checkpoint_every_files`）。`overrides` 的 key 必须是 `HDF5ScanOptions` 的字段名，未知字段直接 `TypeError`。
+需要少量覆盖全局 `hdf5` 配置（而非另起一套并行字段）的 feature，可在自己的配置节下加一个 `scan:` 子节，经 `hdf5_scan_options_from_config(config, overrides=...)` 用 `dataclasses.replace` 叠加到全局默认值上（参见 `particle_lake.scan`：只覆盖 `sample_every_nb_time`/`checkpoint_every_files`）。`overrides` 的 key 必须是 `HDF5ScanOptions` 的字段名，未知字段直接 `TypeError`。
 
 当同一 simulation 下需要同时运行多个 HDF5 scan task 时，优先通过 `HDF5ScanSession` 堆积 job 后统一 `run()`，让相同 scan options 的任务共享 HDF5 文件读取。默认尾部增量策略会信任已处理尾部之前的旧文件；旧 HDF5 文件被手动改写时应使用 `force=True` 或删除对应 analysis cache 后重建。
 

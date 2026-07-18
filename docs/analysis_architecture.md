@@ -36,14 +36,28 @@ is promoted here to be the **one** analysis pipeline, not a "macro-only" tool.
 | Layer | Location | Authority | Invalidation |
 | --- | --- | --- | --- |
 | **L0 - raw HDF5** | source `.h5part` files | authoritative, read-only | n/a |
-| **L1 - reader table cache** | `{path}.{table}.df.feather` next to the source file | derived, per-file | **existence-only** (known limitation, see Roadmap #1) |
+| **L1 - reader table cache** | *(retired 2026-07, see below)* | n/a | n/a |
 | **L2 - feature store** | `{analysis_cache_dir}/{simu}/{feature}/` | derived, per-feature | mtime of source files + `schema_version`; legacy features use feather+JSON meta, new features use Parquet+manifest (see PR 3) |
 | **L3 - release layer** | future `release/` build output | derived, publishable | rebuilt from L2 whenever `public: true` columns change |
 
-L1 is populated by `nbody_pipeline/io/hdf5_reader.py::read_file` and is a
-pure per-file cache of the raw tables plus a fixed set of derived columns. L2
-is populated by `HDF5ScanTask` implementations via `HDF5ScanRunner`. L3 does
-not exist yet; it is scoped for a later roadmap item.
+**L1 retirement (2026-07)**: `nbody_pipeline/io/hdf5_reader.py::read_file` used
+to cache its raw tables plus derived columns as `{path}.{table}.df.feather`
+next to the source `.h5part` file, invalidated existence-only (the known
+limitation Roadmap #1 used to track). That cache has been removed. `read_file`
+now sources its raw scalars/singles/binaries/mergers tables from the L2
+particle lake (`nbody_pipeline.analysis.particle_lake`, see Roadmap #5) when
+this source file has already been scanned into it -- reconstructing the old
+raw HDF5 column names/values from the lake's VO-safe columns, inverting the
+density-center position correction exactly in floating point -- and falls
+back to parsing the HDF5 file directly
+(`nbody_pipeline.io.text_parsers.dataframes_from_hdf5_file`) when it hasn't.
+Neither path writes any cache back to disk; the derived-column computation
+itself is unchanged either way. See
+`nbody_pipeline.io.hdf5_reader._raw_tables_from_lake` and
+`tests/test_io.py::TestHDF5FileProcessor::test_read_file_lake_first_matches_raw_fallback`
+(the regression guard that the two paths produce identical output). L2 is
+populated by `HDF5ScanTask` implementations via `HDF5ScanRunner`. L3 does not
+exist yet; it is scoped for a later roadmap item.
 
 ## Task output-type taxonomy
 
@@ -84,15 +98,14 @@ path.
   task instead (see Roadmap #2 for why some existing derived columns need to
   move out of the reader).
 - **`hdf5_reader_kind = "raw"` for tasks needing untouched source values**: a
-  task that must not see `read_file`'s NS/BH display clipping, or must not
-  read/write the L1 feather cache (e.g. because the source/archive directory
-  should never get new files written next to it), sets the class attribute
-  `hdf5_reader_kind = "raw"`. `HDF5ScanRunner` then routes that task's file
-  read through `HDF5FileProcessor.read_raw_tables` ->
-  `raw_dataframes_from_hdf5_file` instead of `read_tables`. All tasks sharing
-  one file read must agree on `hdf5_reader_kind`; the runner raises if they
-  do not. See `nbody_pipeline.analysis.particle_lake` for the reference
-  usage.
+  task that must not see `read_file`'s NS/BH display clipping or any of its
+  derived columns sets the class attribute `hdf5_reader_kind = "raw"`.
+  `HDF5ScanRunner` then routes that task's file read through
+  `HDF5FileProcessor.read_raw_tables` -> `raw_dataframes_from_hdf5_file`
+  instead of `read_tables` (which is lake-first/derived-column, same as
+  `read_file` -- see the L1 retirement note above). All tasks sharing one
+  file read must agree on `hdf5_reader_kind`; the runner raises if they do
+  not. See `nbody_pipeline.analysis.particle_lake` for the reference usage.
 - **`plot_hdf5_file` visualizer freeze**: do not add new visualizers to
   `SimulationPlotter.plot_hdf5_file` until the plot-task registry (Roadmap #3)
   exists.
@@ -125,14 +138,15 @@ table.
 Not implemented in this round; listed here so future work has a documented,
 ordered plan. Items are loosely ordered by dependency.
 
-1. **Reader table cache versioning** (prerequisite for everything below):
-   `{path}.*.df.feather` is currently existence-only invalidated. Add a
-   version marker/sidecar so that changes to `read_file` output can properly
-   invalidate the L1 cache.
+1. ~~**Reader table cache versioning**~~ -- no longer applicable: the L1
+   feather cache this item was about versioning has been retired outright
+   (2026-07; see the L1 retirement note under Data layers above) rather than
+   given a version marker.
 2. **Reader slimming**: move NS/BH `L*`/`Teff*` clipping (currently in
    `read_file`, which bakes display-only artificial values into the data
    layer) into visualization code; audit `tau_gw`/`Ebind` and migrate them to
-   feature tasks if warranted. Depends on #1.
+   feature tasks if warranted. (No longer depends on #1, which is moot now
+   that L1 itself is retired.)
 3. **Plotter task registry**: introduce an `output_kind="plot"` scan task
    type, seeded from the static `PlotTarget` registry pattern in
    `visualization/purge.py`. Once it exists, `plot_hdf5_file` becomes legacy
@@ -147,14 +161,23 @@ ordered plan. Items are loosely ordered by dependency.
    - `snapshot_singles` / `snapshot_binaries` / `snapshot_mergers`
      (`object_rows`, `ParquetDatasetCacheMixin`): raw, force-derivative-free
      column subsets (see the column-drop rationale in each schema YAML's
-     descriptions), coordinates/velocities/physical quantities downcast to
-     `float32` (ids/`ttot`/`time_myr` stay `int64`/`float64`).
+     descriptions), coordinates/velocities/physical quantities stored as
+     `float32` (ids/`ttot`/`time_myr` stay `int64`/`float64`). This is *not* a
+     precision downgrade: NBODY6++GPU writes these HDF5 datasets as `REAL*4`
+     to begin with (confirmed against source,
+     `custom_output_facility.F:150,161,174,180,205,211`), so `float32` here
+     preserves the source precision exactly -- it's `read_file`'s own
+     derived-column arithmetic that upcasts to `float64` and was the actual
+     (harmless) precision inflation.
    - `snapshot_scalars` (`snapshot_scalar`, `ParquetTableCacheMixin`): one row
      per TTOT, every valid slot of the raw HDF5 scalars array.
 
    All four tasks set `hdf5_reader_kind = "raw"` (see Normative policies
-   below) so they never touch the L1 feather cache and never apply the NS/BH
-   display clipping `read_file` bakes in. The three `object_rows` tasks use
+   below) so they never apply the NS/BH display clipping `read_file` bakes
+   in -- and, doubly so post-L1-retirement, since `read_file` itself now
+   reads *from* this lake for its own raw tables (see the L1 retirement note
+   under Data layers above), a lake-building task must not create a
+   read-from-self cycle. The three `object_rows` tasks use
    the Risks #2 worker-direct-write escape hatch unconditionally (not just
    under `parallel=True`): `process_file` calls
    `ParquetDatasetCacheMixin.write_part` itself and returns only

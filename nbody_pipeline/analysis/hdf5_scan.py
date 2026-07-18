@@ -37,7 +37,6 @@ class HDF5ScanOptions:
 
     sample_every_nb_time: float | None = 1.0
     wait_age_hour: int | float = 24
-    use_hdf5_cache: bool = True
     parallel: bool = False
     exclude_bad_dirname: bool = True
     force: bool = False
@@ -62,20 +61,18 @@ def hdf5_scan_options_from_config(
 
     ``overrides`` is applied last via ``dataclasses.replace``, for features
     (e.g. ``particle_lake.scan``) that need to override a handful of fields
-    (``sample_every_nb_time``, ``use_hdf5_cache``, ``checkpoint_every_files``,
-    ...) on top of the global defaults without duplicating the whole section.
+    (``sample_every_nb_time``, ``checkpoint_every_files``, ...) on top of the
+    global defaults without duplicating the whole section.
     """
     hdf5_config = getattr(config, "hdf5", {}) or {}
     if not isinstance(hdf5_config, dict):
         hdf5_config = {}
     file_selection = hdf5_config.get("file_selection", {})
-    table_cache = hdf5_config.get("table_cache", {})
     scan = hdf5_config.get("scan", {})
     options = HDF5ScanOptions(
         sample_every_nb_time=file_selection.get("sample_every_nb_time", 1.0),
         wait_age_hour=file_selection.get("wait_age_hour", 24),
         exclude_bad_dirname=file_selection.get("exclude_bad_dirname", True),
-        use_hdf5_cache=table_cache.get("use_hdf5_cache", True),
         parallel=scan.get("parallel", False),
         incremental_from_cache_tail=scan.get("incremental_from_cache_tail", True),
         checkpoint_every_files=scan.get("checkpoint_every_files", 100),
@@ -122,9 +119,10 @@ class HDF5ScanTask(Protocol):
     (``"processed"`` (default) or ``"raw"``). ``"raw"`` routes the runner's
     per-file table read through ``HDF5FileProcessor.read_raw_tables`` instead
     of ``read_tables`` -- untouched source dtypes, no NS/BH display clipping,
-    never reads/writes the L1 feather cache. All tasks sharing one file read
-    (one ``HDF5ScanRunner.run()`` call) must declare the same
-    ``hdf5_reader_kind``; mixing raises.
+    no derived columns at all (neither reads via the particle lake nor
+    parses+derives from HDF5; see ``raw_dataframes_from_hdf5_file``). All
+    tasks sharing one file read (one ``HDF5ScanRunner.run()`` call) must
+    declare the same ``hdf5_reader_kind``; mixing raises.
 
     ``write_cache_and_meta``'s ``prune_orphans`` is ``True`` by default (the
     old, unconditional behavior) but the runner calls it with ``False`` for
@@ -380,7 +378,6 @@ class HDF5ScanRunner:
                 simu_name,
                 tables=required_tables,
                 columns_by_table=columns_by_table,
-                use_cache=options.use_hdf5_cache,
             )
 
         if options.skip_unreadable_files:
@@ -635,6 +632,11 @@ _NON_PERSISTED_SCAN_OPTION_KEYS = (
     "checkpoint_every_files",
     "parallel",
     "skip_unreadable_files",
+    # Removed from HDF5ScanOptions (2026-07 L1 feather-cache retirement): kept here
+    # so normalize_persisted_scan_options still strips it from manifests written by
+    # the old code, instead of every existing on-disk cache looking like an
+    # options change and forcing a one-time full rebuild.
+    "use_hdf5_cache",
 )
 
 

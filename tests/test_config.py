@@ -64,7 +64,6 @@ class TestConfigManager:
         assert config.galactic_energy_angular_momentum["percentile_limits"] == [0.1, 99.9]
         assert isinstance(config.hdf5, dict)
         assert "file_selection" in config.hdf5
-        assert "table_cache" in config.hdf5
         assert "scan" in config.hdf5
         assert config.hdf5["scan"]["checkpoint_every_files"] == 100
 
@@ -195,7 +194,6 @@ class TestConfigManager:
 
         assert config.particle_lake["enabled"] is False
         assert config.particle_lake["scan"]["sample_every_nb_time"] is None
-        assert config.particle_lake["scan"]["use_hdf5_cache"] is False
 
     def test_user_config_overrides_particle_lake_section(self, temp_dir):
         user_config = {

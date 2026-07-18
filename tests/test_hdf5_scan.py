@@ -46,7 +46,6 @@ def make_config(tmp_path: Path) -> Mock:
             "sample_every_nb_time": 1.0,
             "exclude_bad_dirname": True,
         },
-        "table_cache": {"use_hdf5_cache": True},
         "scan": {"parallel": False, "incremental_from_cache_tail": True},
     }
     config.kw_to_stellar_type = {1: "MS", 13: "NS", 14: "BH"}
@@ -98,7 +97,12 @@ class FakeProcessor:
     def get_all_hdf5_paths(self, *args, **kwargs):
         return self.hdf5_paths
 
-    def read_tables(self, hdf5_path, simu_name, tables, columns_by_table=None, use_cache=True):
+    def read_tables(self, hdf5_path, simu_name, tables, columns_by_table=None):
+        self.read_count += 1
+        self.read_paths.append(hdf5_path)
+        return {table: self.tables_by_path[hdf5_path][table] for table in tables}
+
+    def read_raw_tables(self, hdf5_path, tables, columns_by_table=None):
         self.read_count += 1
         self.read_paths.append(hdf5_path)
         return {table: self.tables_by_path[hdf5_path][table] for table in tables}
@@ -114,10 +118,15 @@ class FailingProcessor(FakeProcessor):
         super().__init__(hdf5_paths, tables_by_path)
         self.fail_paths = fail_paths
 
-    def read_tables(self, hdf5_path, simu_name, tables, columns_by_table=None, use_cache=True):
+    def read_tables(self, hdf5_path, simu_name, tables, columns_by_table=None):
         if hdf5_path in self.fail_paths:
             raise RuntimeError(f"failed to read {hdf5_path}")
-        return super().read_tables(hdf5_path, simu_name, tables, columns_by_table, use_cache)
+        return super().read_tables(hdf5_path, simu_name, tables, columns_by_table)
+
+    def read_raw_tables(self, hdf5_path, tables, columns_by_table=None):
+        if hdf5_path in self.fail_paths:
+            raise RuntimeError(f"failed to read {hdf5_path}")
+        return super().read_raw_tables(hdf5_path, tables, columns_by_table)
 
 
 class FakeContinuousProcessor:
@@ -216,52 +225,54 @@ def test_binary_extractor_writes_metadata_for_empty_match(tmp_path: Path) -> Non
     assert meta["processed_files"][str(hdf5_path)]["ttot"] == [1.0]
 
 
-def test_hdf5_file_processor_reads_selected_feather_tables(tmp_path: Path) -> None:
+def test_hdf5_file_processor_read_tables_projects_columns_from_read_file(tmp_path: Path) -> None:
+    """read_tables is a thin pass-through: one read_file call, then column projection."""
     config = make_config(tmp_path)
     processor = HDF5FileProcessor(config)
     hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
-    pd.DataFrame({"TTOT": [1.0], "Time[Myr]": [10.0], "unused": [0]}).to_feather(
-        hdf5_path + ".scalars.df.feather"
-    )
-    pd.DataFrame(
-        {"TTOT": [1.0], "Bin KW1": [14], "unused": [0], "binary_class": ["hard"]}
-    ).to_feather(hdf5_path + ".binaries.df.feather")
-    processor.read_file = Mock(side_effect=AssertionError("should not parse full HDF5"))
+    full = {
+        "scalars": pd.DataFrame({"TTOT": [1.0], "Time[Myr]": [10.0], "unused": [0]}).set_index(
+            "TTOT", drop=False
+        ),
+        "binaries": pd.DataFrame(
+            {"TTOT": [1.0], "Bin KW1": [14], "unused": [0], "binary_class": ["hard"]}
+        ),
+    }
+    processor.read_file = Mock(return_value=full)
 
     result = processor.read_tables(
         hdf5_path,
         "sim",
         tables=["scalars", "binaries"],
         columns_by_table={"scalars": ["TTOT"], "binaries": ["TTOT", "Bin KW1"]},
-        use_cache=True,
     )
 
     assert list(result["scalars"].columns) == ["TTOT"]
     assert list(result["binaries"].columns) == ["TTOT", "Bin KW1"]
-    processor.read_file.assert_not_called()
+    processor.read_file.assert_called_once_with(hdf5_path, "sim")
 
 
-def test_hdf5_file_processor_falls_back_when_feather_columns_missing(tmp_path: Path) -> None:
+def test_hdf5_file_processor_read_tables_keeps_all_columns_when_unprojected(
+    tmp_path: Path,
+) -> None:
     config = make_config(tmp_path)
     processor = HDF5FileProcessor(config)
     hdf5_path = str(tmp_path / "snap.40_1.0.h5part")
-    pd.DataFrame({"TTOT": [1.0]}).to_feather(hdf5_path + ".scalars.df.feather")
-    pd.DataFrame({"TTOT": [1.0]}).to_feather(hdf5_path + ".binaries.df.feather")
-    fallback = {
+    full = {
         "scalars": pd.DataFrame({"TTOT": [1.0], "Time[Myr]": [10.0]}).set_index("TTOT", drop=False),
         "binaries": pd.DataFrame({"TTOT": [1.0], "Bin KW1": [14]}),
     }
-    processor.read_file = Mock(return_value=fallback)
+    processor.read_file = Mock(return_value=full)
 
     result = processor.read_tables(
         hdf5_path,
         "sim",
         tables=["scalars", "binaries"],
-        columns_by_table={"scalars": ["TTOT", "Time[Myr]"], "binaries": ["Bin KW1"]},
-        use_cache=True,
+        columns_by_table={"binaries": ["Bin KW1"]},
     )
 
     assert result["binaries"]["Bin KW1"].iloc[0] == 14
+    assert list(result["scalars"].columns) == ["TTOT", "Time[Myr]"]
     processor.read_file.assert_called_once()
 
 
@@ -374,13 +385,11 @@ def test_scan_backed_analysis_scan_options_merge_and_validate(tmp_path: Path) ->
     config.hdf5["file_selection"]["sample_every_nb_time"] = 2.0
     config.hdf5["scan"]["parallel"] = True
     config.hdf5["scan"]["checkpoint_every_files"] = 7
-    config.hdf5["table_cache"]["use_hdf5_cache"] = False
     analysis = ScanBackedAnalysisForTest(config, FakeProcessor([], {}))
 
     options = analysis._scan_options(force=True)
     assert options.sample_every_nb_time == 2.0
     assert options.parallel is True
-    assert options.use_hdf5_cache is False
     assert options.checkpoint_every_files == 7
     assert not hasattr(options, "processes")
     assert options.force is True
@@ -471,11 +480,11 @@ def test_hdf5_scan_options_from_config_applies_overrides(tmp_path: Path) -> None
     config.hdf5["file_selection"]["sample_every_nb_time"] = 1.0
 
     options = hdf5_scan_options_from_config(
-        config, overrides={"sample_every_nb_time": None, "use_hdf5_cache": False}
+        config, overrides={"sample_every_nb_time": None, "checkpoint_every_files": 5}
     )
 
     assert options.sample_every_nb_time is None
-    assert options.use_hdf5_cache is False
+    assert options.checkpoint_every_files == 5
     # Non-overridden fields still come from the global hdf5 config section.
     assert options.wait_age_hour == 0
 
@@ -991,16 +1000,18 @@ def test_scan_runner_rebuilds_cache_when_old_meta_has_no_scan_options(tmp_path: 
 
 
 def compact_tables(rows: list[tuple[int, int, int, int, float, float]]) -> dict[str, pd.DataFrame]:
+    """Raw scalars/binaries tables for CompactBinaryCountTask (``hdf5_reader_kind = "raw"``).
+
+    The 6th element of each row is kept for readability (matches the ``TSCALE=10.0``
+    convention below, i.e. ``Time[Myr] == TTOT * 10.0``) but is not itself read by the
+    task -- it derives ``Time[Myr]`` from raw ``TTOT``/``TSCALE`` instead.
+    """
     binaries = pd.DataFrame(
         rows,
         columns=["Bin Name1", "Bin Name2", "Bin KW1", "Bin KW2", "TTOT", "Time[Myr]"],
-    )
-    scalars = pd.DataFrame(
-        {
-            "TTOT": sorted(binaries["TTOT"].unique()),
-            "Time[Myr]": [float(t) * 10.0 for t in sorted(binaries["TTOT"].unique())],
-        }
-    ).set_index("TTOT", drop=False)
+    ).drop(columns=["Time[Myr]"])
+    ttot_values = sorted(binaries["TTOT"].unique())
+    scalars = pd.DataFrame({"TTOT": ttot_values, "TSCALE": [10.0] * len(ttot_values)})
     return {"scalars": scalars, "binaries": binaries}
 
 

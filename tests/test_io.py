@@ -356,8 +356,11 @@ class TestHDF5FileProcessor:
             }
         )
 
-    def test_read_file_can_read_cache_without_writing_missing_cache(self):
-        """use_cache=True can check Feather cache without creating it."""
+    def test_read_file_computes_derived_columns_via_raw_fallback(self):
+        """No lake data available for this file/simu_name -> falls back to parsing
+        the HDF5 file directly (dataframes_from_hdf5_file), still computing all
+        derived columns. Config is a bare Mock() (no cache-dir attributes), which
+        _raw_tables_from_lake must treat as "no lake" rather than raising."""
         config_mock = Mock()
         config_mock.input_file_path_of = {"test_simu": "/fake/input"}
         config_mock.kw_to_stellar_type_verbose = {0: "0:MS"}
@@ -387,8 +390,6 @@ class TestHDF5FileProcessor:
         }
 
         with (
-            patch.object(processor, "_cache_is_complete", return_value=False),
-            patch.object(processor, "_write_df_dict_to_cache") as mock_write,
             patch(
                 "nbody_pipeline.io.text_parsers.dataframes_from_hdf5_file",
                 return_value=df_dict,
@@ -398,15 +399,9 @@ class TestHDF5FileProcessor:
                 return_value="10",
             ),
         ):
-            result = processor.read_file(
-                "/fake/snap.40_1.h5part",
-                "test_simu",
-                use_cache=True,
-                write_cache=False,
-            )
+            result = processor.read_file("/fake/snap.40_1.h5part", "test_simu")
 
         assert result["scalars"]["Time[Myr]"].tolist() == [1.0]
-        mock_write.assert_not_called()
 
         binaries = result["binaries"]
         assert list(binaries["binary_class"]) == ["hard", "soft", "temporary"]
@@ -454,7 +449,6 @@ class TestHDF5FileProcessor:
         }
 
         with (
-            patch.object(processor, "_cache_is_complete", return_value=False),
             patch(
                 "nbody_pipeline.io.text_parsers.dataframes_from_hdf5_file",
                 return_value=df_dict,
@@ -464,9 +458,7 @@ class TestHDF5FileProcessor:
                 return_value="10",
             ),
         ):
-            result = processor.read_file(
-                "/fake/snap.40_1.h5part", "test_simu", use_cache=False, write_cache=False
-            )
+            result = processor.read_file("/fake/snap.40_1.h5part", "test_simu")
 
         binaries_out = result["binaries"]
         # No "Bin Label" column -> sentinel -9 for every row -> never hard.
@@ -475,88 +467,11 @@ class TestHDF5FileProcessor:
         assert binaries_out["mean_core_interparticle_distance[au]"].isna().all()
         assert binaries_out["eclose_nb"].isna().all()
 
-    def test_binaries_cache_is_current_true_when_binary_class_present(self, temp_dir):
+    def test_read_tables_is_thin_passthrough_over_read_file(self):
+        """read_tables no longer has its own cache path: one read_file call, then
+        column projection of the in-memory result."""
         processor = HDF5FileProcessor(Mock())
-        path = str(temp_dir / "current.binaries.df.feather")
-        pd.DataFrame({"TTOT": [1.0], "binary_class": ["hard"]}).to_feather(path)
-        assert processor._binaries_cache_is_current(path) is True
-
-    def test_binaries_cache_is_current_false_for_stale_nonempty(self, temp_dir):
-        processor = HDF5FileProcessor(Mock())
-        path = str(temp_dir / "stale.binaries.df.feather")
-        pd.DataFrame({"TTOT": [1.0], "Ebind/kT": [2.0]}).to_feather(path)
-        assert processor._binaries_cache_is_current(path) is False
-
-    def test_binaries_cache_is_current_true_for_empty_placeholder(self, temp_dir):
-        """An old zero-row placeholder cache has nothing stale, so counts as current."""
-        processor = HDF5FileProcessor(Mock())
-        path = str(temp_dir / "empty.binaries.df.feather")
-        pd.DataFrame().to_feather(path)
-        assert processor._binaries_cache_is_current(path) is True
-
-    def test_read_file_self_heals_stale_binaries_cache(self, temp_dir):
-        """use_cache=True re-reads HDF5 and rewrites the cache when the cached
-        binaries feather predates binary_class, instead of returning stale data."""
-        config_mock = Mock()
-        config_mock.input_file_path_of = {"test_simu": "/fake/input"}
-        config_mock.kw_to_stellar_type_verbose = {0: "0:MS"}
-        config_mock.kw_to_stellar_type = {0: "MS"}
-        config_mock.limits = {"L*": [1.0e-6, 1.0e6], "Teff*": [1000.0, 1.0e6]}
-        config_mock.universe_age_myr = 13800.0
-        processor = HDF5FileProcessor(config_mock)
-
-        hdf5_path = str(temp_dir / "snap.40_1.h5part")
-        feather_path_of = processor._get_feather_path_of(hdf5_path)
-        self._make_scalars_mock().reset_index(drop=True).to_feather(feather_path_of["scalars"])
-        pd.DataFrame({"TTOT": [1.0], "X1": [0.0]}).to_feather(feather_path_of["singles"])
-        # Stale: pre-reclassification schema, no binary_class column.
-        pd.DataFrame({"TTOT": [1.0], "Ebind/kT": [2.0]}).to_feather(feather_path_of["binaries"])
-        pd.DataFrame().to_feather(feather_path_of["mergers"])
-
-        df_dict = {
-            "scalars": self._make_scalars_mock(),
-            "singles": pd.DataFrame(
-                {
-                    "TTOT": [1.0],
-                    "X1": [0.0],
-                    "X2": [0.0],
-                    "X3": [0.0],
-                    "V1": [0.0],
-                    "V2": [0.0],
-                    "V3": [0.0],
-                    "M": [1.0],
-                    "KW": [0],
-                    "L*": [1.0],
-                    "Teff*": [5000.0],
-                }
-            ),
-            "binaries": self._make_binaries_mock_three_classes(),
-            "mergers": pd.DataFrame(),
-        }
-
-        with (
-            patch(
-                "nbody_pipeline.io.text_parsers.dataframes_from_hdf5_file",
-                return_value=df_dict,
-            ),
-            patch(
-                "nbody_pipeline.io.text_parsers.get_valueStr_of_namelist_key",
-                return_value="10",
-            ),
-        ):
-            result = processor.read_file(hdf5_path, "test_simu", use_cache=True, write_cache=True)
-
-        assert "binary_class" in result["binaries"].columns
-        # Self-healed: the cache on disk now has the new schema too.
-        assert processor._binaries_cache_is_current(feather_path_of["binaries"]) is True
-
-    def test_read_tables_falls_back_when_binaries_cache_stale(self, temp_dir):
-        """Column-projected read_tables reads never request binary_class directly,
-        so staleness must be probed independent of columns_by_table."""
-        processor = HDF5FileProcessor(Mock())
-        hdf5_path = str(temp_dir / "snap.40_2.h5part")
-        feather_path_of = processor._get_feather_path_of(hdf5_path)
-        pd.DataFrame({"TTOT": [1.0], "Ebind/kT": [2.0]}).to_feather(feather_path_of["binaries"])
+        hdf5_path = "/fake/snap.40_2.h5part"
 
         fresh_binaries = pd.DataFrame({"TTOT": [1.0], "Bin A[au]": [1.0], "binary_class": ["hard"]})
         with patch.object(
@@ -567,11 +482,179 @@ class TestHDF5FileProcessor:
                 "test_simu",
                 tables=("binaries",),
                 columns_by_table={"binaries": ["Bin A[au]"]},
-                use_cache=True,
             )
 
-        mock_read_file.assert_called_once()
-        assert "Bin A[au]" in result["binaries"].columns
+        mock_read_file.assert_called_once_with(hdf5_path, "test_simu")
+        assert list(result["binaries"].columns) == ["Bin A[au]"]
+
+    def _full_raw_scalars(self, ttot: float = 1.0) -> pd.DataFrame:
+        """A one-row raw scalars table covering every SCALAR_KEYS slot (required
+        by SnapshotScalarsTask._build_rows), indexed by TTOT like the real reader."""
+        from nbody_pipeline.io.text_parsers import SCALAR_KEYS
+
+        row = {key: 0.0 for key in SCALAR_KEYS}
+        row.update(
+            {
+                "TTOT": ttot,
+                "RBAR": 2.0,
+                "ZMBAR": 1.0,
+                "N": 5.0,
+                "TSTAR": 1.0,
+                "RDENS(1)": 0.1,
+                "RDENS(2)": 0.2,
+                "RDENS(3)": 0.3,
+                "TTOT/TCR0": 0.5,
+                "TSCALE": 3.0,
+                "VSTAR": 4.0,
+                "RC": 0.01,
+                "NC": 1000.0,
+                "ECLOSE": 1.0,
+                "N_SINGLE": 2.0,
+                "N_BINARY": 1.0,
+                "N_MERGER": 0.0,
+            }
+        )
+        return pd.DataFrame([row]).set_index("TTOT", drop=False)
+
+    def _raw_singles_two_stars(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "TTOT": [1.0, 1.0],
+                "Name": [101, 102],
+                "KW": [0, 1],
+                "Type": [0, 0],
+                "M": [1.5, 2.5],
+                "X1": [1.0, -1.0],
+                "X2": [2.0, -2.0],
+                "X3": [3.0, -3.0],
+                "V1": [0.1, -0.1],
+                "V2": [0.2, -0.2],
+                "V3": [0.3, -0.3],
+                "POT": [-5.0, -6.0],
+                "R*": [1.0, 1.2],
+                "L*": [1.0, 2.0],
+                "Teff*": [5000.0, 6000.0],
+                "RC*": [0.1, 0.2],
+                "MC*": [0.05, 0.06],
+                "ASPN": [0.0, 0.0],
+                "EPOCH": [0.0, 0.0],
+            }
+        )
+
+    def _raw_binaries_one_pair(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "TTOT": [1.0],
+                "Bin Name1": [201],
+                "Bin Name2": [202],
+                "Bin cm Name": [301],
+                "Bin KW1": [0],
+                "Bin KW2": [0],
+                "Bin cm KW": [0],
+                "Bin Label": [1],
+                "Bin M1*": [3.0],
+                "Bin M2*": [2.0],
+                "Bin cm X1": [0.5],
+                "Bin cm X2": [0.6],
+                "Bin cm X3": [0.7],
+                "Bin cm V1": [0.01],
+                "Bin cm V2": [0.02],
+                "Bin cm V3": [0.03],
+                "Bin rel X1": [0.001],
+                "Bin rel X2": [0.002],
+                "Bin rel X3": [0.003],
+                "Bin rel V1": [0.0001],
+                "Bin rel V2": [0.0002],
+                "Bin rel V3": [0.0003],
+                "Bin POT": [-1.0],
+                "Bin A[au]": [5.0],
+                "Bin ECC": [0.2],
+                "Bin P[d]": [100.0],
+                "Bin G": [0.001],
+                "Bin RS1*": [1.0],
+                "Bin RS2*": [1.1],
+                "Bin L1*": [1.0],
+                "Bin L2*": [1.1],
+                "Bin Teff1*": [5000.0],
+                "Bin Teff2*": [5200.0],
+                "Bin RC1*": [0.1],
+                "Bin RC2*": [0.1],
+                "Bin MC1*": [0.05],
+                "Bin MC2*": [0.05],
+                "ASPN1": [0.0],
+                "ASPN2": [0.0],
+                "EPOCH1": [0.0],
+                "EPOCH2": [0.0],
+            }
+        )
+
+    def _minimal_config(self, temp_dir, simu_name: str) -> Mock:
+        config_mock = Mock()
+        config_mock.analysis_cache_dir_of = {simu_name: str(temp_dir / "cache" / simu_name)}
+        config_mock.kw_to_stellar_type_verbose = {0: "0:MS", 1: "1:MS"}
+        config_mock.kw_to_stellar_type = {0: "MS", 1: "MS"}
+        config_mock.limits = {"L*": [1.0e-6, 1.0e6], "Teff*": [1000.0, 1.0e6]}
+        config_mock.universe_age_myr = 13800.0
+        return config_mock
+
+    def test_read_file_lake_first_matches_raw_fallback(self, temp_dir):
+        """Core regression guard for the L1 feather-cache retirement: read_file's
+        lake-sourced path (this file already scanned into snapshot_singles/
+        binaries/scalars) must produce byte-for-byte the same derived output as
+        the raw-HDF5-parse fallback path (this file *not* in any lake), for every
+        table read_file returns."""
+        from nbody_pipeline.analysis.cache_paths import SNAPSHOT_SCALARS_FEATURE, analysis_cache_dir
+        from nbody_pipeline.analysis.particle_lake import (
+            SnapshotBinariesTask,
+            SnapshotScalarsTask,
+            SnapshotSinglesTask,
+        )
+
+        hdf5_path = str(temp_dir / "snap.40_1.0.h5part")
+        scalars_raw = self._full_raw_scalars()
+        singles_raw = self._raw_singles_two_stars()
+        binaries_raw = self._raw_binaries_one_pair()
+
+        # -- Build a real (small) lake for simu_name "sim_lake" ---------------
+        lake_config = self._minimal_config(temp_dir, "sim_lake")
+        scalars_task = SnapshotScalarsTask(lake_config, "sim_lake")
+        scalars_rows = scalars_task._build_rows(hdf5_path, scalars_raw)
+        scalars_dir = analysis_cache_dir(lake_config, "sim_lake", SNAPSHOT_SCALARS_FEATURE)
+        scalars_dir.mkdir(parents=True, exist_ok=True)
+        scalars_rows.to_parquet(scalars_dir / "snapshot_scalars.parquet", index=False)
+
+        SnapshotSinglesTask(lake_config, "sim_lake").process_file(
+            hdf5_path, {"scalars": scalars_raw, "singles": singles_raw}, {}, None
+        )
+        SnapshotBinariesTask(lake_config, "sim_lake").process_file(
+            hdf5_path, {"scalars": scalars_raw, "binaries": binaries_raw}, {}, None
+        )
+        # Deliberately no snapshot_mergers part written: exercises the
+        # per-table FileNotFoundError -> empty-table fallback inside
+        # _raw_tables_from_lake for a file that *is* otherwise in the lake.
+
+        lake_result = HDF5FileProcessor(lake_config).read_file(hdf5_path, "sim_lake", N0=5)
+
+        # -- Raw fallback for a different, lake-less simu_name ----------------
+        raw_config = self._minimal_config(temp_dir, "sim_raw")
+        raw_config.analysis_cache_dir_of = {}  # "sim_raw" unknown -> KeyError -> no lake
+        raw_df_dict = {
+            "scalars": scalars_raw.copy(),
+            "singles": singles_raw.copy(),
+            "binaries": binaries_raw.copy(),
+            "mergers": None,
+        }
+        with patch(
+            "nbody_pipeline.io.text_parsers.dataframes_from_hdf5_file",
+            return_value=raw_df_dict,
+        ):
+            raw_result = HDF5FileProcessor(raw_config).read_file(hdf5_path, "sim_raw", N0=5)
+
+        assert lake_result["mergers"].empty and raw_result["mergers"].empty
+        for table in ("scalars", "singles", "binaries"):
+            lake_df = lake_result[table].reset_index(drop=True).sort_index(axis=1)
+            raw_df = raw_result[table].reset_index(drop=True).sort_index(axis=1)
+            pd.testing.assert_frame_equal(lake_df, raw_df, check_exact=False, check_dtype=False)
 
     def test_get_all_hdf5_paths_dedups_same_index_keeps_larger_file(self, temp_dir, monkeypatch):
         """Two different physical files can share the same filename-derived index

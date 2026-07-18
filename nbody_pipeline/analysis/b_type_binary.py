@@ -55,7 +55,6 @@ class BTypeBinaryExtractor(ScanBackedAnalysisBase):
             simu_name,
             update=update,
             wait_age_hour=options.wait_age_hour,
-            use_hdf5_cache=options.use_hdf5_cache,
         )
         task = BTypeBinaryTask(
             self.config,
@@ -71,7 +70,6 @@ class BTypeBinaryExtractor(ScanBackedAnalysisBase):
         *,
         update: bool,
         wait_age_hour: int | float,
-        use_hdf5_cache: bool,
     ) -> pd.DataFrame:
         identifier = PrimordialBinaryIdentifier(self.config)
         identifier.hdf5_file_processor = self.hdf5_file_processor
@@ -79,7 +77,6 @@ class BTypeBinaryExtractor(ScanBackedAnalysisBase):
             simu_name,
             update=update,
             wait_age_hour=wait_age_hour,
-            use_hdf5_cache=use_hdf5_cache,
         )
 
     def _primordial_signature(self, simu_name: str) -> Dict[str, Any]:

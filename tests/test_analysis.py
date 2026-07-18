@@ -589,7 +589,6 @@ class TestCurrentMassLagrangianProcessor:
                 "sample_every_nb_time": 1.0,
                 "exclude_bad_dirname": True,
             },
-            "table_cache": {"use_hdf5_cache": True},
             "scan": {"parallel": False, "incremental_from_cache_tail": True},
         }
         return config
@@ -660,8 +659,6 @@ class TestCurrentMassLagrangianProcessor:
         processor.hdf5_file_processor.read_file.assert_called_once_with(
             str(hdf5_path),
             "test_simu",
-            use_cache=True,
-            write_cache=False,
         )
         assert (
             tmp_path / "cache" / "test_simu" / "current_lagrangian" / "current_mass_lagr.feather"
@@ -988,7 +985,6 @@ class TestCompactBinaryCounter:
                 "sample_every_nb_time": 0,
                 "exclude_bad_dirname": False,
             },
-            "table_cache": {"use_hdf5_cache": False},
             "scan": {"parallel": False, "incremental_from_cache_tail": True},
         }
         config.compact_object_KW = np.array([10, 11, 12, 13, 14])
@@ -1057,19 +1053,25 @@ class TestCompactBinaryCounter:
         assert records["xray_binary"][(1, 2)]["n_snapshots_seen_in_category"] == 1
 
     def test_summarize_simulation_uses_hdf5_scan_parameters(self, counter):
-        scalars = pd.DataFrame({"TTOT": [1.0, 2.0], "Time[Myr]": [10.0, 20.0]}).set_index(
-            "TTOT", drop=False
-        )
+        # CompactBinaryCountTask.hdf5_reader_kind == "raw": raw scalars/binaries,
+        # no "Time[Myr]"/"Stellar Type" -- Time[Myr] is derived from TTOT*TSCALE.
+        scalars = pd.DataFrame({"TTOT": [1.0, 2.0], "TSCALE": [10.0, 10.0]})
         binaries = pd.concat(
             [
-                self._binary_df([(1, 2, 14, 14, 1.0, 10.0), (3, 4, 13, 1, 1.0, 10.0)]),
-                self._binary_df([(2, 1, 14, 13, 2.0, 20.0), (5, 6, 10, 1, 2.0, 20.0)]),
+                pd.DataFrame(
+                    [(1, 2, 14, 14, 1.0), (3, 4, 13, 1, 1.0)],
+                    columns=["Bin Name1", "Bin Name2", "Bin KW1", "Bin KW2", "TTOT"],
+                ),
+                pd.DataFrame(
+                    [(2, 1, 14, 13, 2.0), (5, 6, 10, 1, 2.0)],
+                    columns=["Bin Name1", "Bin Name2", "Bin KW1", "Bin KW2", "TTOT"],
+                ),
             ],
             ignore_index=True,
         )
 
         counter.hdf5_file_processor.get_all_hdf5_paths = Mock(return_value=["/tmp/a.h5part"])
-        counter.hdf5_file_processor.read_tables = Mock(
+        counter.hdf5_file_processor.read_raw_tables = Mock(
             return_value={"scalars": scalars, "binaries": binaries}
         )
 
@@ -1081,8 +1083,7 @@ class TestCompactBinaryCounter:
             exclude_bad_dirname=False,
             wait_age_hour=3,
         )
-        counter.hdf5_file_processor.read_tables.assert_called_once()
-        assert counter.hdf5_file_processor.read_tables.call_args.kwargs["use_cache"] is False
+        counter.hdf5_file_processor.read_raw_tables.assert_called_once()
         assert result["summary"] == {
             "gw_source": 1,
             "pulsar": 1,
@@ -1170,7 +1171,6 @@ class TestGalacticOrbitProcessor:
                 "sample_every_nb_time": 1.0,
                 "exclude_bad_dirname": True,
             },
-            "table_cache": {"use_hdf5_cache": True},
             "scan": {"parallel": False, "incremental_from_cache_tail": True},
         }
         return config
