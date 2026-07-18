@@ -132,13 +132,15 @@ class FakeRawProcessor:
         self.tables_by_path = tables_by_path
         self.read_count = 0
         self.read_paths: list[str] = []
+        self.raw_simu_names: list = []
 
     def get_all_hdf5_paths(self, *args, **kwargs):
         return self.hdf5_paths
 
-    def read_raw_tables(self, hdf5_path, tables, columns_by_table=None):
+    def read_raw_tables(self, hdf5_path, tables, columns_by_table=None, *, simu_name=None):
         self.read_count += 1
         self.read_paths.append(hdf5_path)
+        self.raw_simu_names.append(simu_name)
         return {table: self.tables_by_path[hdf5_path][table] for table in tables}
 
     def read_step_times(self, hdf5_path):
@@ -176,11 +178,15 @@ def test_build_scan_jobs_share_one_options_instance(tmp_path: Path) -> None:
     ]
     assert len({job.options for job in jobs}) == 1
     assert jobs[0].options.sample_every_nb_time is None
-    assert all(job.task.hdf5_reader_kind == "raw" for job in jobs)
+    assert all(job.task.hdf5_reader_kind == "source" for job in jobs)
 
 
 def test_singles_task_rdens_correction_and_no_luminosity_clipping(tmp_path: Path) -> None:
     config, processor, _outputs, _path = _run_lake_tasks(tmp_path)
+
+    # hdf5_reader_kind == "source": read_raw_tables must always be called with
+    # simu_name=None, so building the lake never reads back from itself.
+    assert processor.raw_simu_names and set(processor.raw_simu_names) == {None}
 
     data_dir = analysis_cache_dir(config, "sim", SNAPSHOT_SINGLES_FEATURE) / "data"
     rows = pd.read_parquet(data_dir)

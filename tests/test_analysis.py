@@ -1084,6 +1084,9 @@ class TestCompactBinaryCounter:
             wait_age_hour=3,
         )
         counter.hdf5_file_processor.read_raw_tables.assert_called_once()
+        assert (
+            counter.hdf5_file_processor.read_raw_tables.call_args.kwargs["simu_name"] == "test_simu"
+        )
         assert result["summary"] == {
             "gw_source": 1,
             "pulsar": 1,

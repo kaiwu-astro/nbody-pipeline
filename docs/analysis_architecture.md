@@ -43,21 +43,35 @@ is promoted here to be the **one** analysis pipeline, not a "macro-only" tool.
 **L1 retirement (2026-07)**: `nbody_pipeline/io/hdf5_reader.py::read_file` used
 to cache its raw tables plus derived columns as `{path}.{table}.df.feather`
 next to the source `.h5part` file, invalidated existence-only (the known
-limitation Roadmap #1 used to track). That cache has been removed. `read_file`
-now sources its raw scalars/singles/binaries/mergers tables from the L2
-particle lake (`nbody_pipeline.analysis.particle_lake`, see Roadmap #5) when
-this source file has already been scanned into it -- reconstructing the old
-raw HDF5 column names/values from the lake's VO-safe columns, inverting the
-density-center position correction exactly in floating point -- and falls
-back to parsing the HDF5 file directly
-(`nbody_pipeline.io.text_parsers.dataframes_from_hdf5_file`) when it hasn't.
-Neither path writes any cache back to disk; the derived-column computation
-itself is unchanged either way. See
-`nbody_pipeline.io.hdf5_reader._raw_tables_from_lake` and
+limitation Roadmap #1 used to track). That cache has been removed. Both
+`read_file` (`hdf5_reader_kind = "processed"`) and `read_raw_tables`
+(`hdf5_reader_kind = "raw"`) now source their raw scalars/singles/binaries/
+mergers tables from the L2 particle lake (`nbody_pipeline.analysis.particle_lake`,
+see Roadmap #5) when this source file has already been scanned into it --
+reconstructing the old raw HDF5 column names/values from the lake's VO-safe
+columns, inverting the density-center position correction exactly in floating
+point -- and fall back to parsing the HDF5 file directly
+(`nbody_pipeline.io.text_parsers.dataframes_from_hdf5_file` /
+`raw_dataframes_from_hdf5_file`) when it hasn't, or (for `read_raw_tables`)
+when a requested column has no lake equivalent. Neither path writes any cache
+back to disk; the derived-column computation itself is unchanged either way.
+`read_raw_tables` additionally supports real column projection against the
+lake (`load_feature(columns=...)`), not just against the HDF5 fallback, so
+narrow-column consumers (e.g. `CompactBinaryCountTask`) get the same
+lake-first savings `read_file` does. See
+`nbody_pipeline.io.hdf5_reader._raw_tables_from_lake` (backs `read_file`, full
+columns only), `_projected_raw_tables_from_lake` (backs `read_raw_tables`,
+column-projected), and
 `tests/test_io.py::TestHDF5FileProcessor::test_read_file_lake_first_matches_raw_fallback`
-(the regression guard that the two paths produce identical output). L2 is
-populated by `HDF5ScanTask` implementations via `HDF5ScanRunner`. L3 does not
-exist yet; it is scoped for a later roadmap item.
+/ `test_read_raw_tables_lake_first_matches_raw_fallback` (the regression
+guards that the lake-sourced and HDF5-fallback paths produce identical
+output). A source HDF5 file that changes *after* being scanned into the lake
+(e.g. a restarted job overwrites it) is a known, accepted staleness gap: a
+lake-first read returns the lake's snapshot of that file until the lake is
+rebuilt, not the file's current on-disk content -- both `read_file` and
+`read_raw_tables` share this semantics. L2 is populated by `HDF5ScanTask`
+implementations via `HDF5ScanRunner`. L3 does not exist yet; it is scoped for
+a later roadmap item.
 
 ## Task output-type taxonomy
 
@@ -97,15 +111,22 @@ path.
   Heavy or science-specific derived quantities belong in a dedicated feature
   task instead (see Roadmap #2 for why some existing derived columns need to
   move out of the reader).
-- **`hdf5_reader_kind = "raw"` for tasks needing untouched source values**: a
-  task that must not see `read_file`'s NS/BH display clipping or any of its
-  derived columns sets the class attribute `hdf5_reader_kind = "raw"`.
-  `HDF5ScanRunner` then routes that task's file read through
-  `HDF5FileProcessor.read_raw_tables` -> `raw_dataframes_from_hdf5_file`
-  instead of `read_tables` (which is lake-first/derived-column, same as
-  `read_file` -- see the L1 retirement note above). All tasks sharing one
-  file read must agree on `hdf5_reader_kind`; the runner raises if they do
-  not. See `nbody_pipeline.analysis.particle_lake` for the reference usage.
+- **`hdf5_reader_kind` three-way split; analysis tasks default to lake-first**:
+  `HDF5ScanTask.hdf5_reader_kind` is one of `"processed"` (default,
+  `read_tables` -> `read_file`, lake-first derived columns), `"raw"`
+  (`read_raw_tables` with `simu_name` passed through -- lake-first, untouched
+  source dtypes, no NS/BH display clipping, no derived columns, falling back
+  to `raw_dataframes_from_hdf5_file` when this file/column isn't in the lake),
+  or `"source"` (`read_raw_tables` with `simu_name=None` -- always parses the
+  HDF5 file directly, never touches the lake). A task that must not see
+  `read_file`'s NS/BH clipping or derived columns, but still wants the
+  lake-first savings, sets `hdf5_reader_kind = "raw"`; `"source"` is reserved
+  for the particle-lake build tasks themselves
+  (`nbody_pipeline.analysis.particle_lake`), so that building the lake never
+  reads back from the (possibly stale/incomplete) lake it is building -- this
+  is the *only* case where an analysis task should bypass the lake. All tasks
+  sharing one file read must agree on `hdf5_reader_kind`; the runner raises on
+  a mismatch or an unrecognized value.
 - **`plot_hdf5_file` visualizer freeze**: do not add new visualizers to
   `SimulationPlotter.plot_hdf5_file` until the plot-task registry (Roadmap #3)
   exists.
@@ -172,12 +193,14 @@ ordered plan. Items are loosely ordered by dependency.
    - `snapshot_scalars` (`snapshot_scalar`, `ParquetTableCacheMixin`): one row
      per TTOT, every valid slot of the raw HDF5 scalars array.
 
-   All four tasks set `hdf5_reader_kind = "raw"` (see Normative policies
+   All four tasks set `hdf5_reader_kind = "source"` (see Normative policies
    below) so they never apply the NS/BH display clipping `read_file` bakes
-   in -- and, doubly so post-L1-retirement, since `read_file` itself now
-   reads *from* this lake for its own raw tables (see the L1 retirement note
-   under Data layers above), a lake-building task must not create a
-   read-from-self cycle. The three `object_rows` tasks use
+   in, and -- doubly so post-L1-retirement, since both `read_file` and
+   `read_raw_tables` now read *from* this lake by default (see the L1
+   retirement note under Data layers above) -- always parse the source HDF5
+   file directly rather than `"raw"`'s lake-first behavior, so a
+   lake-building task never creates a read-from-self cycle. The three
+   `object_rows` tasks use
    the Risks #2 worker-direct-write escape hatch unconditionally (not just
    under `parallel=True`): `process_file` calls
    `ParquetDatasetCacheMixin.write_part` itself and returns only

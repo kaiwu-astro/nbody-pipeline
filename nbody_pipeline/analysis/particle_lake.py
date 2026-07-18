@@ -6,10 +6,13 @@ for singles/binaries/mergers/scalars into four VO-safe schema-registered
 tables, one row per object per snapshot (or one row per snapshot for
 scalars). See docs/analysis_architecture.md Roadmap #5.
 
-All four tasks read via ``hdf5_reader_kind = "raw"``
-(``HDF5FileProcessor.read_raw_tables``): untouched source dtypes, no NS/BH
-display clipping, never touches the L1 feather cache next to source/archive
-files. The three per-object tasks write their Parquet part directly inside
+All four tasks read via ``hdf5_reader_kind = "source"``
+(``HDF5FileProcessor.read_raw_tables`` with ``simu_name=None``): untouched
+source dtypes, no NS/BH display clipping, and -- critically -- never reads
+back from the lake it is building (unlike ``"raw"``, which is lake-first with
+an HDF5 fallback; see ``nbody_pipeline.analysis.hdf5_scan.HDF5ScanTask``'s
+docstring for the three-way ``hdf5_reader_kind`` split). The three per-object
+tasks write their Parquet part directly inside
 ``process_file`` via ``ParquetDatasetCacheMixin.write_part`` (the worker
 "direct write" escape hatch documented in docs/analysis_architecture.md Risks
 #2) instead of returning the full DataFrame to the main process, since a
@@ -263,7 +266,7 @@ class SnapshotSinglesTask(ParquetDatasetCacheMixin):
 
     schema_version = 1
     name = "snapshot_singles"
-    hdf5_reader_kind = "raw"
+    hdf5_reader_kind = "source"
     required_tables: Sequence[str] = ("scalars", "singles")
     columns_by_table: Mapping[str, Sequence[str] | None] = {
         "scalars": list(_SCALE_SCALAR_COLUMNS),
@@ -371,7 +374,7 @@ class SnapshotBinariesTask(ParquetDatasetCacheMixin):
 
     schema_version = 1
     name = "snapshot_binaries"
-    hdf5_reader_kind = "raw"
+    hdf5_reader_kind = "source"
     required_tables: Sequence[str] = ("scalars", "binaries")
     columns_by_table: Mapping[str, Sequence[str] | None] = {
         "scalars": list(_SCALE_SCALAR_COLUMNS),
@@ -535,7 +538,7 @@ class SnapshotMergersTask(ParquetDatasetCacheMixin):
 
     schema_version = 1
     name = "snapshot_mergers"
-    hdf5_reader_kind = "raw"
+    hdf5_reader_kind = "source"
     required_tables: Sequence[str] = ("scalars", "mergers")
     columns_by_table: Mapping[str, Sequence[str] | None] = {
         "scalars": list(_SCALE_SCALAR_COLUMNS),
@@ -721,7 +724,7 @@ class SnapshotScalarsTask(ParquetTableCacheMixin):
     # just this table (cheap: one row per TTOT) to apply the fix retroactively.
     schema_version = 2
     name = "snapshot_scalars"
-    hdf5_reader_kind = "raw"
+    hdf5_reader_kind = "source"
     required_tables: Sequence[str] = ("scalars",)
     columns_by_table: Mapping[str, Sequence[str] | None] = {"scalars": None}
 

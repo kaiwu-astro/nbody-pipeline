@@ -115,14 +115,29 @@ class HDF5ScanTask(Protocol):
     synchronously clear on-disk state broader than one file, e.g. a
     directory of Parquet parts.
 
-    Tasks may optionally define a class attribute ``hdf5_reader_kind``
-    (``"processed"`` (default) or ``"raw"``). ``"raw"`` routes the runner's
-    per-file table read through ``HDF5FileProcessor.read_raw_tables`` instead
-    of ``read_tables`` -- untouched source dtypes, no NS/BH display clipping,
-    no derived columns at all (neither reads via the particle lake nor
-    parses+derives from HDF5; see ``raw_dataframes_from_hdf5_file``). All
-    tasks sharing one file read (one ``HDF5ScanRunner.run()`` call) must
-    declare the same ``hdf5_reader_kind``; mixing raises.
+    Tasks may optionally define a class attribute ``hdf5_reader_kind``, one of
+    three values:
+
+    - ``"processed"`` (default): routes through
+      ``HDF5FileProcessor.read_tables`` -> ``read_file``'s lake-first
+      derived-column path (falls back to parsing HDF5 directly when this file
+      isn't in the lake yet).
+    - ``"raw"``: routes through ``HDF5FileProcessor.read_raw_tables`` with
+      ``simu_name`` passed through -- untouched source dtypes, no NS/BH
+      display clipping, no derived columns, but still lake-first (a projected
+      reconstruction from the particle lake, falling back to parsing HDF5
+      directly). For analysis tasks that need raw values without paying for
+      ``read_file``'s full derived-column computation.
+    - ``"source"``: routes through ``read_raw_tables`` with ``simu_name=None``,
+      always parsing the HDF5 file directly, never touching the particle lake.
+      Exclusively for the particle-lake build tasks themselves
+      (``nbody_pipeline.analysis.particle_lake``), so that building the lake
+      never reads back from the (possibly stale/incomplete) lake it is
+      building.
+
+    All tasks sharing one file read (one ``HDF5ScanRunner.run()`` call) must
+    declare the same ``hdf5_reader_kind``; mixing raises, as does an unknown
+    value.
 
     ``write_cache_and_meta``'s ``prune_orphans`` is ``True`` by default (the
     old, unconditional behavior) but the runner calls it with ``False`` for
@@ -367,11 +382,12 @@ class HDF5ScanRunner:
         reader_kind = _shared_hdf5_reader_kind(file_tasks, hdf5_path)
 
         def _read() -> Dict[str, pd.DataFrame]:
-            if reader_kind == "raw":
+            if reader_kind in ("raw", "source"):
                 return self.hdf5_file_processor.read_raw_tables(
                     hdf5_path,
                     tables=required_tables,
                     columns_by_table=columns_by_table,
+                    simu_name=simu_name if reader_kind == "raw" else None,
                 )
             return self.hdf5_file_processor.read_tables(
                 hdf5_path,
@@ -476,12 +492,19 @@ def _merge_columns_by_table(
             task_columns = task.columns_by_table.get(table)
             if task_columns is None:
                 columns[table] = None
-            elif columns.get(table) is not None:
+            elif columns.get(table, set()) is not None:
+                # Default to `set()` (not None) for a table not yet in `columns`,
+                # so the first task to declare a column list for it actually gets
+                # registered -- `columns.get(table)` alone returns None for a
+                # missing key too, silently dropping that task's projection.
                 columns.setdefault(table, set()).update(task_columns)
     return {
         table: None if table_columns is None else sorted(table_columns)
         for table, table_columns in columns.items()
     }
+
+
+_VALID_HDF5_READER_KINDS = {"processed", "raw", "source"}
 
 
 def _shared_hdf5_reader_kind(file_tasks: Sequence[HDF5ScanTask], hdf5_path: str) -> str:
@@ -492,7 +515,14 @@ def _shared_hdf5_reader_kind(file_tasks: Sequence[HDF5ScanTask], hdf5_path: str)
             f"HDF5 scan tasks sharing one file read must use the same hdf5_reader_kind, "
             f"got {sorted(kinds)} for {hdf5_path} (tasks: {[task.name for task in file_tasks]})"
         )
-    return next(iter(kinds), "processed")
+    kind = next(iter(kinds), "processed")
+    if kind not in _VALID_HDF5_READER_KINDS:
+        raise ValueError(
+            f"Unknown hdf5_reader_kind {kind!r} for {hdf5_path} "
+            f"(tasks: {[task.name for task in file_tasks]}); "
+            f"must be one of {sorted(_VALID_HDF5_READER_KINDS)}"
+        )
+    return kind
 
 
 def _filter_df_dict_by_sample(

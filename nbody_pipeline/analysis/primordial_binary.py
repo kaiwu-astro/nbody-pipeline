@@ -68,13 +68,23 @@ class PrimordialBinaryIdentifier(SimulationOnceAnalysisBase):
         )
         source_mtime = os.path.getmtime(first_hdf5_path)
         # Only ever needs raw "Bin Name1"/"Bin Name2"/"TTOT" (see
-        # _identify_primordial_binaries below); read_raw_tables never touches the
-        # particle lake or applies read_file's derived columns/NS-BH clipping, and is
-        # cheap for a single file at simulation start.
+        # _identify_primordial_binaries below); read_raw_tables applies none of
+        # read_file's derived columns/NS-BH clipping, and is lake-first (a
+        # projected reconstruction from the particle lake) with a source-HDF5
+        # fallback when this file isn't in the lake yet -- cheap either way for a
+        # single file at simulation start. "binaries": None means "all raw binary
+        # columns" under the post-lake-migration definition (the retired L1
+        # cache's column set, i.e. no force-derivative/integrator columns) when
+        # served from the lake; the HDF5 fallback path returns literally every
+        # source column instead. Both supersets satisfy REQUIRED_BINARY_COLUMNS
+        # below. This result feeds a once-cache with no freshness check
+        # (SimulationOnceAnalysisBase), so whichever column set was computed at
+        # cache-write time is what persists.
         df_dict = self.hdf5_file_processor.read_raw_tables(
             first_hdf5_path,
             tables=["scalars", "binaries"],
             columns_by_table={"scalars": ["TTOT"], "binaries": None},
+            simu_name=simu_name,
         )
         binaries = df_dict.get("binaries", pd.DataFrame())
         scalars = df_dict.get("scalars", pd.DataFrame())

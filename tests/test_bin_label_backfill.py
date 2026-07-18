@@ -175,7 +175,7 @@ class FakeRawProcessor:
     def get_all_hdf5_paths(self, *args, **kwargs):
         return self.hdf5_paths
 
-    def read_raw_tables(self, hdf5_path, tables, columns_by_table=None):
+    def read_raw_tables(self, hdf5_path, tables, columns_by_table=None, *, simu_name=None):
         self.read_count += 1
         return {table: self.tables_by_path[hdf5_path][table] for table in tables}
 

@@ -236,6 +236,37 @@ _MERGERS_LAKE_TO_RAW_DIRECT: Dict[str, str] = {
 }
 
 
+# Position-column maps (raw HDF5 column -> lake column, in RDENS(1)/(2)/(3) axis
+# order) shared by ``_object_raw_from_lake`` and ``_lake_columns_for_request``.
+_SINGLES_POS_MAP: Dict[str, str] = {"X1": "x_pc", "X2": "y_pc", "X3": "z_pc"}
+_BINARIES_POS_MAP: Dict[str, str] = {
+    "Bin cm X1": "cm_x_pc",
+    "Bin cm X2": "cm_y_pc",
+    "Bin cm X3": "cm_z_pc",
+}
+_MERGERS_POS_MAP: Dict[str, str] = {
+    "Mer XC1": "cm_x_pc",
+    "Mer XC2": "cm_y_pc",
+    "Mer XC3": "cm_z_pc",
+}
+
+# raw -> lake reverse maps, generated from the *_LAKE_TO_RAW* dicts above, used by
+# read_raw_tables' lake-first path to translate a caller's requested raw columns
+# into the lake columns to load.
+_SINGLES_RAW_TO_LAKE_DIRECT: Dict[str, str] = {v: k for k, v in _SINGLES_LAKE_TO_RAW_DIRECT.items()}
+_BINARIES_RAW_TO_LAKE_DIRECT: Dict[str, str] = {
+    v: k for k, v in _BINARIES_LAKE_TO_RAW_DIRECT.items()
+}
+_MERGERS_RAW_TO_LAKE_DIRECT: Dict[str, str] = {v: k for k, v in _MERGERS_LAKE_TO_RAW_DIRECT.items()}
+_SCALARS_RAW_TO_LAKE: Dict[str, str] = {v: k for k, v in _SCALARS_LAKE_TO_RAW.items()}
+
+_OBJECT_TABLE_RAW_TO_LAKE: Dict[str, Dict[str, str]] = {
+    "singles": {**_SINGLES_RAW_TO_LAKE_DIRECT, **_SINGLES_POS_MAP},
+    "binaries": {**_BINARIES_RAW_TO_LAKE_DIRECT, **_BINARIES_POS_MAP},
+    "mergers": {**_MERGERS_RAW_TO_LAKE_DIRECT, **_MERGERS_POS_MAP},
+}
+
+
 def _scalars_raw_from_lake(lake_scalars: pd.DataFrame) -> pd.DataFrame:
     """Rebuild the raw ``scalars`` table (indexed by TTOT) from a lake slice."""
     raw = lake_scalars.rename(columns=_SCALARS_LAKE_TO_RAW)
@@ -269,37 +300,103 @@ _BINARIES_RAW_COLUMNS = [
 _MERGERS_RAW_COLUMNS = [*_MERGERS_LAKE_TO_RAW_DIRECT.values(), "Mer XC1", "Mer XC2", "Mer XC3"]
 
 
+def _object_raw_from_lake(
+    lake_df: pd.DataFrame,
+    rdens_pc: pd.DataFrame,
+    *,
+    direct_map: Dict[str, str],
+    pos_map: Dict[str, str],
+    all_raw_columns: Sequence[str],
+    columns: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    """Rebuild a raw singles/binaries/mergers table from a lake slice.
+
+    ``columns=None`` reconstructs every raw column (``all_raw_columns``, in
+    the fixed order the retired L1 cache used). Given ``columns``, only the
+    requested position columns (from ``pos_map``) are inverted -- other
+    requested columns are just renamed -- and the result's column order
+    follows ``raw_dataframes_from_hdf5_file``'s convention: requested order
+    with ``TTOT`` dropped from wherever it was and appended last. An empty
+    ``lake_df`` (this file has no rows for this table) returns an empty
+    DataFrame carrying the same column names, matching the raw-HDF5 fallback.
+    """
+    if columns is None:
+        output_columns = list(all_raw_columns)
+    else:
+        output_columns = [col for col in dict.fromkeys(columns) if col != "TTOT"] + ["TTOT"]
+
+    if lake_df.empty:
+        return pd.DataFrame(columns=output_columns)
+
+    raw = lake_df.rename(columns=direct_map)
+    ttot = lake_df["ttot"]
+    for axis_idx, (raw_col, lake_col) in enumerate(pos_map.items(), start=1):
+        if columns is not None and raw_col not in columns:
+            continue
+        raw[raw_col] = _invert_rdens_offset(lake_df[lake_col], ttot, rdens_pc[f"RDENS({axis_idx})"])
+    return raw[output_columns].reset_index(drop=True)
+
+
 def _singles_raw_from_lake(lake_singles: pd.DataFrame, rdens_pc: pd.DataFrame) -> pd.DataFrame:
-    if lake_singles.empty:
-        return pd.DataFrame(columns=_SINGLES_RAW_COLUMNS)
-    raw = lake_singles.rename(columns=_SINGLES_LAKE_TO_RAW_DIRECT)
-    ttot = lake_singles["ttot"]
-    raw["X1"] = _invert_rdens_offset(lake_singles["x_pc"], ttot, rdens_pc["RDENS(1)"])
-    raw["X2"] = _invert_rdens_offset(lake_singles["y_pc"], ttot, rdens_pc["RDENS(2)"])
-    raw["X3"] = _invert_rdens_offset(lake_singles["z_pc"], ttot, rdens_pc["RDENS(3)"])
-    return raw[_SINGLES_RAW_COLUMNS].reset_index(drop=True)
+    return _object_raw_from_lake(
+        lake_singles,
+        rdens_pc,
+        direct_map=_SINGLES_LAKE_TO_RAW_DIRECT,
+        pos_map=_SINGLES_POS_MAP,
+        all_raw_columns=_SINGLES_RAW_COLUMNS,
+    )
 
 
 def _binaries_raw_from_lake(lake_binaries: pd.DataFrame, rdens_pc: pd.DataFrame) -> pd.DataFrame:
-    if lake_binaries.empty:
-        return pd.DataFrame(columns=_BINARIES_RAW_COLUMNS)
-    raw = lake_binaries.rename(columns=_BINARIES_LAKE_TO_RAW_DIRECT)
-    ttot = lake_binaries["ttot"]
-    raw["Bin cm X1"] = _invert_rdens_offset(lake_binaries["cm_x_pc"], ttot, rdens_pc["RDENS(1)"])
-    raw["Bin cm X2"] = _invert_rdens_offset(lake_binaries["cm_y_pc"], ttot, rdens_pc["RDENS(2)"])
-    raw["Bin cm X3"] = _invert_rdens_offset(lake_binaries["cm_z_pc"], ttot, rdens_pc["RDENS(3)"])
-    return raw[_BINARIES_RAW_COLUMNS].reset_index(drop=True)
+    return _object_raw_from_lake(
+        lake_binaries,
+        rdens_pc,
+        direct_map=_BINARIES_LAKE_TO_RAW_DIRECT,
+        pos_map=_BINARIES_POS_MAP,
+        all_raw_columns=_BINARIES_RAW_COLUMNS,
+    )
 
 
 def _mergers_raw_from_lake(lake_mergers: pd.DataFrame, rdens_pc: pd.DataFrame) -> pd.DataFrame:
-    if lake_mergers.empty:
-        return pd.DataFrame(columns=_MERGERS_RAW_COLUMNS)
-    raw = lake_mergers.rename(columns=_MERGERS_LAKE_TO_RAW_DIRECT)
-    ttot = lake_mergers["ttot"]
-    raw["Mer XC1"] = _invert_rdens_offset(lake_mergers["cm_x_pc"], ttot, rdens_pc["RDENS(1)"])
-    raw["Mer XC2"] = _invert_rdens_offset(lake_mergers["cm_y_pc"], ttot, rdens_pc["RDENS(2)"])
-    raw["Mer XC3"] = _invert_rdens_offset(lake_mergers["cm_z_pc"], ttot, rdens_pc["RDENS(3)"])
-    return raw[_MERGERS_RAW_COLUMNS].reset_index(drop=True)
+    return _object_raw_from_lake(
+        lake_mergers,
+        rdens_pc,
+        direct_map=_MERGERS_LAKE_TO_RAW_DIRECT,
+        pos_map=_MERGERS_POS_MAP,
+        all_raw_columns=_MERGERS_RAW_COLUMNS,
+    )
+
+
+def _load_lake_slice(
+    config_manager: Any,
+    simu_name: str,
+    feature: Any,
+    hdf5_path: str,
+    *,
+    columns: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    """Load one feature's rows for one source HDF5 file; empty DataFrame if absent.
+
+    Only catches ``FileNotFoundError`` (routine: this feature's Parquet
+    dataset hasn't been written for this simulation, or has no rows for this
+    file). Callers that need to detect "no lake at all for this simulation"
+    (a broader exception set -- ``AttributeError``/``KeyError``/``TypeError``
+    from a ``config_manager`` with no cache-dir mapping) must catch those
+    themselves around their first lake call.
+    """
+    from nbody_pipeline.query import load_feature
+
+    try:
+        return load_feature(
+            config_manager,
+            simu_name,
+            feature,
+            columns=columns,
+            where="source_hdf5_path = ?",
+            params=[hdf5_path],
+        )
+    except FileNotFoundError:
+        return pd.DataFrame()
 
 
 def _raw_tables_from_lake(
@@ -322,7 +419,6 @@ def _raw_tables_from_lake(
 
     from nbody_pipeline.query import load_feature
     from nbody_pipeline.analysis.cache_paths import (
-        AnalysisCacheFeature,
         SNAPSHOT_BINARIES_FEATURE,
         SNAPSHOT_MERGERS_FEATURE,
         SNAPSHOT_SCALARS_FEATURE,
@@ -350,17 +446,11 @@ def _raw_tables_from_lake(
     raw_scalars = _scalars_raw_from_lake(lake_scalars)
     rdens_pc = _rdens_pc_from_raw_scalars(raw_scalars)
 
-    def _load(feature: AnalysisCacheFeature) -> pd.DataFrame:
-        try:
-            return load_feature(
-                config_manager, simu_name, feature, where="source_hdf5_path = ?", params=[hdf5_path]
-            )
-        except FileNotFoundError:
-            return pd.DataFrame()
-
-    lake_singles = _load(SNAPSHOT_SINGLES_FEATURE)
-    lake_binaries = _load(SNAPSHOT_BINARIES_FEATURE)
-    lake_mergers = _load(SNAPSHOT_MERGERS_FEATURE)
+    lake_singles = _load_lake_slice(config_manager, simu_name, SNAPSHOT_SINGLES_FEATURE, hdf5_path)
+    lake_binaries = _load_lake_slice(
+        config_manager, simu_name, SNAPSHOT_BINARIES_FEATURE, hdf5_path
+    )
+    lake_mergers = _load_lake_slice(config_manager, simu_name, SNAPSHOT_MERGERS_FEATURE, hdf5_path)
 
     return {
         "scalars": raw_scalars,
@@ -368,6 +458,138 @@ def _raw_tables_from_lake(
         "binaries": _binaries_raw_from_lake(lake_binaries, rdens_pc),
         "mergers": _mergers_raw_from_lake(lake_mergers, rdens_pc),
     }
+
+
+def _lake_columns_for_request(table: str, raw_columns: Sequence[str]) -> Optional[set]:
+    """Map requested raw columns for one object table to the lake columns to load.
+
+    Always includes ``"ttot"`` (needed to invert position-column offsets and
+    to attach the ``TTOT`` column every raw row carries). Returns ``None`` if
+    any requested column has no lake equivalent -- a force-derivative/
+    integrator column dropped by the L1-cache-retirement lake migration (see
+    the module docstring above ``_raw_tables_from_lake``) -- signalling the
+    caller to fall back to parsing the HDF5 file for the whole request.
+    """
+    raw_to_lake = _OBJECT_TABLE_RAW_TO_LAKE[table]
+    lake_columns = {"ttot"}
+    for raw_col in raw_columns:
+        if raw_col == "TTOT":
+            continue
+        lake_col = raw_to_lake.get(raw_col)
+        if lake_col is None:
+            return None
+        lake_columns.add(lake_col)
+    return lake_columns
+
+
+def _projected_raw_tables_from_lake(
+    config_manager: Any,
+    simu_name: Optional[str],
+    hdf5_path: str,
+    tables: Sequence[str],
+    columns_by_table: Optional[Mapping[str, Optional[Sequence[str]]]],
+) -> Optional[Dict[str, pd.DataFrame]]:
+    """Lake-first, column-projected counterpart to ``raw_dataframes_from_hdf5_file``.
+
+    Backs ``read_raw_tables``'s lake-first path (unlike ``_raw_tables_from_lake``,
+    which backs ``read_file`` and always reconstructs every raw column). Returns
+    ``None`` (caller falls back to parsing the HDF5 file directly) if this
+    simulation/file has no lake data yet, or if any requested column across any
+    requested table has no lake equivalent.
+
+    The mappability precheck (before any lake query) is deliberately
+    all-or-nothing across every requested table: mixing a lake read for one
+    table with an HDF5 read for another would need two separate file opens/
+    TTOT-dedup passes for no real benefit, since every ``read_raw_tables``
+    caller requests columns from only a handful of tables at once.
+    """
+    if simu_name is None:
+        return None
+
+    from nbody_pipeline.analysis.cache_paths import (
+        SNAPSHOT_BINARIES_FEATURE,
+        SNAPSHOT_MERGERS_FEATURE,
+        SNAPSHOT_SCALARS_FEATURE,
+        SNAPSHOT_SINGLES_FEATURE,
+    )
+
+    requested_tables = list(dict.fromkeys(tables))
+    columns_by_table = columns_by_table or {}
+    object_tables = [table for table in requested_tables if table in _OBJECT_TABLE_RAW_TO_LAKE]
+
+    lake_columns_by_table: Dict[str, Optional[set]] = {}
+    for table in object_tables:
+        raw_columns = columns_by_table.get(table)
+        if raw_columns is None:
+            lake_columns_by_table[table] = None
+            continue
+        lake_columns = _lake_columns_for_request(table, raw_columns)
+        if lake_columns is None:
+            return None
+        lake_columns_by_table[table] = lake_columns
+
+    from nbody_pipeline.query import load_feature
+
+    try:
+        lake_scalars = load_feature(
+            config_manager,
+            simu_name,
+            SNAPSHOT_SCALARS_FEATURE,
+            where="source_hdf5_path = ?",
+            params=[hdf5_path],
+        )
+    except (FileNotFoundError, AttributeError, KeyError, TypeError, ValueError):
+        return None
+    if lake_scalars.empty:
+        return None
+
+    raw_scalars = _scalars_raw_from_lake(lake_scalars).reset_index(drop=True)
+    rdens_pc = _rdens_pc_from_raw_scalars(raw_scalars.set_index("TTOT", drop=False))
+
+    result: Dict[str, pd.DataFrame] = {}
+    if "scalars" in requested_tables:
+        requested_scalar_cols = columns_by_table.get("scalars")
+        if requested_scalar_cols is None:
+            result["scalars"] = raw_scalars
+        else:
+            ordered = [col for col in dict.fromkeys(requested_scalar_cols) if col != "TTOT"] + [
+                "TTOT"
+            ]
+            result["scalars"] = raw_scalars[ordered]
+
+    feature_by_table = {
+        "singles": SNAPSHOT_SINGLES_FEATURE,
+        "binaries": SNAPSHOT_BINARIES_FEATURE,
+        "mergers": SNAPSHOT_MERGERS_FEATURE,
+    }
+    reconstruct_by_table = {
+        "singles": (_SINGLES_LAKE_TO_RAW_DIRECT, _SINGLES_POS_MAP, _SINGLES_RAW_COLUMNS),
+        "binaries": (_BINARIES_LAKE_TO_RAW_DIRECT, _BINARIES_POS_MAP, _BINARIES_RAW_COLUMNS),
+        "mergers": (_MERGERS_LAKE_TO_RAW_DIRECT, _MERGERS_POS_MAP, _MERGERS_RAW_COLUMNS),
+    }
+    for table in object_tables:
+        lake_columns = lake_columns_by_table[table]
+        try:
+            lake_slice = _load_lake_slice(
+                config_manager,
+                simu_name,
+                feature_by_table[table],
+                hdf5_path,
+                columns=sorted(lake_columns) if lake_columns is not None else None,
+            )
+        except ValueError:
+            return None
+        direct_map, pos_map, all_raw_columns = reconstruct_by_table[table]
+        result[table] = _object_raw_from_lake(
+            lake_slice,
+            rdens_pc,
+            direct_map=direct_map,
+            pos_map=pos_map,
+            all_raw_columns=all_raw_columns,
+            columns=columns_by_table.get(table),
+        )
+
+    return {table: result[table] for table in requested_tables if table in result}
 
 
 class HDF5FileProcessor:
@@ -408,16 +630,58 @@ class HDF5FileProcessor:
         hdf5_path: str,
         tables: Sequence[str],
         columns_by_table: Optional[Mapping[str, Sequence[str] | None]] = None,
+        *,
+        simu_name: Optional[str] = None,
     ) -> Dict[str, pd.DataFrame]:
-        """Read selected raw HDF5 tables with h5py-level column projection.
+        """Read selected raw (original column names/dtypes, no derived columns)
+        HDF5 tables, lake-first with a source-HDF5 fallback.
 
-        Thin wrapper around ``raw_dataframes_from_hdf5_file``: never touches
-        the particle lake or ``read_file``'s derived columns/NS-BH display
-        clipping. For scan tasks that declare ``hdf5_reader_kind = "raw"``
-        (see ``nbody_pipeline.analysis.particle_lake``), which need the
-        original source values.
+        Never applies ``read_file``'s derived columns or NS/BH display
+        clipping -- for scan tasks/callers that need original source values
+        (``hdf5_reader_kind = "raw"``, see ``nbody_pipeline.analysis.hdf5_scan``).
+
+        ``simu_name`` (non-``None``) tries the particle lake first
+        (``nbody_pipeline.analysis.particle_lake``): a projected reconstruction
+        of exactly the requested tables/columns from
+        snapshot_scalars/singles/binaries/mergers, offset-inverted back to raw
+        N-body-unit values (see ``_projected_raw_tables_from_lake``). Falls back
+        to parsing ``hdf5_path`` directly (``raw_dataframes_from_hdf5_file``,
+        with real h5py-level column projection) whenever this file isn't in the
+        lake yet, or any requested column has no lake equivalent -- a
+        force-derivative/integrator column (``A1-3``, ``STEP``, ``T0``, ...)
+        dropped by the L1-cache-retirement lake migration, confirmed zero
+        consumers repo-wide (see the module docstring above
+        ``_raw_tables_from_lake``). ``simu_name=None`` skips the lake lookup
+        entirely and always parses the HDF5 file -- this is what the particle-lake
+        build tasks themselves use (``hdf5_reader_kind = "source"``), so that
+        building the lake never reads back from the (possibly stale/incomplete)
+        lake it is building.
+
+        A ``columns_by_table[table] is None`` request means "all columns of
+        that table" -- post-migration, that means the retired L1 cache's raw
+        column set (``_SINGLES_RAW_COLUMNS``/``_BINARIES_RAW_COLUMNS``/
+        ``_MERGERS_RAW_COLUMNS``), not literally every original HDF5 dataset,
+        whichever path serves the request (lake or HDF5 fallback both apply
+        this projection consistently for a "full" request).
+
+        Stale-lake semantics: if the source HDF5 file changes after being
+        scanned into the lake (e.g. a restarted job overwrites it), a
+        lake-first read here returns the lake's (stale) snapshot of that file,
+        not the current on-disk content, until the lake is rebuilt -- the same
+        already-accepted semantics as ``read_file``'s lake-first raw tables
+        (see its docstring).
         """
         from nbody_pipeline.io.text_parsers import raw_dataframes_from_hdf5_file
+
+        if simu_name is not None:
+            lake_result = _projected_raw_tables_from_lake(
+                self.config, simu_name, hdf5_path, tables, columns_by_table
+            )
+            if lake_result is not None:
+                logger.info(
+                    "[hdf5-lake] Sourced raw tables from the particle lake for %s", hdf5_path
+                )
+                return lake_result
 
         return raw_dataframes_from_hdf5_file(
             hdf5_path, tables=tables, columns_by_table=columns_by_table

@@ -656,6 +656,135 @@ class TestHDF5FileProcessor:
             raw_df = raw_result[table].reset_index(drop=True).sort_index(axis=1)
             pd.testing.assert_frame_equal(lake_df, raw_df, check_exact=False, check_dtype=False)
 
+    def test_read_raw_tables_lake_first_matches_raw_fallback(self, temp_dir):
+        """read_raw_tables' lake-first path (a column-projected reconstruction of
+        the requested raw tables/columns from the particle lake) must match the
+        raw-HDF5-parse fallback path for the same request: a counter-style narrow
+        projection, a position-column request (offset inversion), the "full
+        columns" case (== the retired L1 cache's *_RAW_COLUMNS set), and an
+        unmappable-column request falling back to parsing HDF5 directly."""
+        from nbody_pipeline.analysis.cache_paths import SNAPSHOT_SCALARS_FEATURE, analysis_cache_dir
+        from nbody_pipeline.analysis.particle_lake import (
+            SnapshotBinariesTask,
+            SnapshotScalarsTask,
+            SnapshotSinglesTask,
+        )
+        from nbody_pipeline.io import hdf5_reader as hdf5_reader_module
+
+        hdf5_path = str(temp_dir / "snap.40_1.0.h5part")
+        scalars_raw = self._full_raw_scalars()
+        singles_raw = self._raw_singles_two_stars()
+        binaries_raw = self._raw_binaries_one_pair()
+
+        lake_config = self._minimal_config(temp_dir, "sim_lake")
+        scalars_rows = SnapshotScalarsTask(lake_config, "sim_lake")._build_rows(
+            hdf5_path, scalars_raw
+        )
+        scalars_dir = analysis_cache_dir(lake_config, "sim_lake", SNAPSHOT_SCALARS_FEATURE)
+        scalars_dir.mkdir(parents=True, exist_ok=True)
+        scalars_rows.to_parquet(scalars_dir / "snapshot_scalars.parquet", index=False)
+        SnapshotSinglesTask(lake_config, "sim_lake").process_file(
+            hdf5_path, {"scalars": scalars_raw, "singles": singles_raw}, {}, None
+        )
+        SnapshotBinariesTask(lake_config, "sim_lake").process_file(
+            hdf5_path, {"scalars": scalars_raw, "binaries": binaries_raw}, {}, None
+        )
+        processor = HDF5FileProcessor(lake_config)
+
+        # -- (1) counter-style narrow projection: scalars + a few binary columns --
+        narrow_columns = {
+            "scalars": ["TTOT", "TSCALE"],
+            "binaries": ["Bin Name1", "Bin Name2", "Bin KW1", "Bin KW2", "TTOT"],
+        }
+        lake_narrow = processor.read_raw_tables(
+            hdf5_path,
+            tables=["scalars", "binaries"],
+            columns_by_table=narrow_columns,
+            simu_name="sim_lake",
+        )
+        assert isinstance(lake_narrow["scalars"].index, pd.RangeIndex)
+        assert "TTOT" in lake_narrow["scalars"].columns
+
+        raw_narrow = {
+            "scalars": scalars_raw.reset_index(drop=True)[narrow_columns["scalars"]],
+            "binaries": binaries_raw[narrow_columns["binaries"]].reset_index(drop=True),
+        }
+        for table in ("scalars", "binaries"):
+            lake_df = lake_narrow[table].reset_index(drop=True).sort_index(axis=1)
+            raw_df = raw_narrow[table].reset_index(drop=True).sort_index(axis=1)
+            pd.testing.assert_frame_equal(lake_df, raw_df, check_exact=False, check_dtype=False)
+
+        # -- (2) position-column request: offset inversion round-trips -----------
+        pos_columns = {"binaries": ["Bin cm X1", "Bin cm X2", "Bin cm X3", "TTOT"]}
+        lake_pos = (
+            processor.read_raw_tables(
+                hdf5_path,
+                tables=["binaries"],
+                columns_by_table=pos_columns,
+                simu_name="sim_lake",
+            )["binaries"]
+            .reset_index(drop=True)
+            .sort_index(axis=1)
+        )
+        raw_pos = binaries_raw[pos_columns["binaries"]].reset_index(drop=True).sort_index(axis=1)
+        pd.testing.assert_frame_equal(lake_pos, raw_pos, check_exact=False, check_dtype=False)
+
+        # -- (3) "None" == full columns == the (retired-L1-cache) *_RAW_COLUMNS set
+        lake_full = processor.read_raw_tables(
+            hdf5_path,
+            tables=["binaries"],
+            columns_by_table={"binaries": None},
+            simu_name="sim_lake",
+        )["binaries"]
+        assert sorted(lake_full.columns) == sorted(hdf5_reader_module._BINARIES_RAW_COLUMNS)
+        lake_full_sorted = lake_full.reset_index(drop=True).sort_index(axis=1)
+        raw_full_sorted = (
+            binaries_raw[list(lake_full.columns)].reset_index(drop=True).sort_index(axis=1)
+        )
+        pd.testing.assert_frame_equal(
+            lake_full_sorted, raw_full_sorted, check_exact=False, check_dtype=False
+        )
+
+        # -- (4) unmappable column (force-derivative, dropped by the lake
+        # migration) triggers a full fallback to parsing the HDF5 file directly --
+        raw_df_dict = {"singles": singles_raw.assign(STEP=0.0)}
+        with patch(
+            "nbody_pipeline.io.text_parsers.raw_dataframes_from_hdf5_file",
+            return_value=raw_df_dict,
+        ) as mock_raw:
+            fallback_result = processor.read_raw_tables(
+                hdf5_path,
+                tables=["singles"],
+                columns_by_table={"singles": ["STEP"]},
+                simu_name="sim_lake",
+            )
+        mock_raw.assert_called_once()
+        assert "STEP" in fallback_result["singles"].columns
+
+    def test_read_raw_tables_without_simu_name_never_touches_lake(self, temp_dir):
+        """simu_name=None must skip the lake lookup entirely -- this is what the
+        particle-lake build tasks rely on via hdf5_reader_kind = "source", so
+        building the lake never reads back from the (possibly stale/incomplete)
+        lake it is building."""
+        hdf5_path = str(temp_dir / "snap.40_1.0.h5part")
+        config_mock = self._minimal_config(temp_dir, "sim")
+        processor = HDF5FileProcessor(config_mock)
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("load_feature must not be called when simu_name is None")
+
+        with patch("nbody_pipeline.query.load_feature", side_effect=_boom):
+            with patch(
+                "nbody_pipeline.io.text_parsers.raw_dataframes_from_hdf5_file",
+                return_value={"scalars": pd.DataFrame({"TTOT": [1.0]})},
+            ) as mock_raw:
+                result = processor.read_raw_tables(
+                    hdf5_path, tables=["scalars"], columns_by_table=None, simu_name=None
+                )
+
+        mock_raw.assert_called_once()
+        assert list(result["scalars"]["TTOT"]) == [1.0]
+
     def test_get_all_hdf5_paths_dedups_same_index_keeps_larger_file(self, temp_dir, monkeypatch):
         """Two different physical files can share the same filename-derived index
         (e.g. a stale archived copy re-generated later under a different directory
